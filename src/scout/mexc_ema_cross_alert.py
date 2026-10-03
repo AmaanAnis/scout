@@ -25,6 +25,7 @@ import shutil
 import smtplib
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
@@ -38,7 +39,7 @@ FAST, SLOW = 20, 200            # EMA lengths
 INTERVAL = "1m"
 CANDLES = 500                   # history per request (EMA200 needs warm-up)
 LOOKBACK = 2                    # check the last N closed candles (covers a slow scan)
-REQS_PER_SEC = 40               # MEXC limit is 500 req / 10 s per endpoint -> stay below
+REQS_PER_SEC = 25               # sources disagree (300 or 500 per 10 s per endpoint) -> stay well below both
 REFRESH_SYMBOLS_EVERY = 3600    # seconds
 
 DESKTOP_NOTIFY = os.getenv("DESKTOP_NOTIFY", "1") == "1"
@@ -60,12 +61,28 @@ local_session.trust_env = False      # never send localhost traffic through a pr
 
 
 # ------------------------- market data ----------------------
+_cooldown_until = 0.0                # when set, EVERY thread waits until this time
+_cooldown_lock = threading.Lock()
+
+
 def get(path, **params):
-    r = session.get(BASE + path, params=params, timeout=10)
-    if r.status_code == 429:        # rate limited -> back off
-        time.sleep(10)
-    r.raise_for_status()
-    return r.json()
+    """GET with a shared back-off: if MEXC says 429, all threads pause, then retry."""
+    global _cooldown_until
+    for attempt in range(1, 4):
+        wait = _cooldown_until - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        r = session.get(BASE + path, params=params, timeout=10)
+        if r.status_code == 429:
+            pause = 5 * attempt
+            with _cooldown_lock:
+                if time.time() + pause > _cooldown_until + 1:     # print once per pause, not per thread
+                    print(f"[warn] MEXC rate limit (429): pausing all requests for {pause}s")
+                _cooldown_until = max(_cooldown_until, time.time() + pause)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError("still rate limited (429) after 3 tries")
 
 
 def ema(values, length):
