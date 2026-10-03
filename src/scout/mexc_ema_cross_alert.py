@@ -2,7 +2,7 @@
 MEXC 1-minute EMA20 / EMA200 cross scanner
 
 - Scans every USDT spot pair on MEXC (filtered by 24h volume)
-- Alerts when EMA20 crosses ABOVE EMA200 (bullish) or BELOW EMA200 (bearish)
+- Alerts when EMA20 crosses ABOVE EMA200 (bullish). Set BULLISH_ONLY=0 to also get bearish crosses.
 - Only uses CLOSED 1m candles, so alerts never "repaint"
 - Runs once a minute, just after each candle closes
 
@@ -14,13 +14,20 @@ Optional extras (set the environment variable to enable):
     NTFY_TOPIC        ntfy.sh topic (phone push; NTFY_SERVER to self-host)
     EMAIL_TO + SMTP_USER + SMTP_PASS   (Gmail: use an App Password)
 
+Only "utility" coins are scanned. Excluded automatically: tokenized stocks/ETFs, stablecoins,
+leveraged tokens (3L/3S...), plus anything in blocklist.txt. To scan ONLY coins you choose, put
+them in allowlist.txt. Both files sit next to this script, one coin per line (HIMSON or HIMSONUSDT).
+
 Usage:
     pip install requests
+    python mexc_ema_cross_alert.py --dry-run   # show which coins are kept / excluded and why, then exit
+    python mexc_ema_cross_alert.py --inspect   # show how MEXC tags coins (categories), then exit
     python mexc_ema_cross_alert.py --test    # sends a test alert and exits
     python mexc_ema_cross_alert.py           # run the scanner
 """
 import os
 import platform
+import re
 import shutil
 import smtplib
 import subprocess
@@ -29,6 +36,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
+from pathlib import Path
 
 import requests
 
@@ -38,9 +46,20 @@ MIN_24H_QUOTE_VOLUME = 50_000   # skip illiquid coins (24h volume in USDT). 0 = 
 FAST, SLOW = 20, 200            # EMA lengths
 INTERVAL = "1m"
 CANDLES = 500                   # history per request (EMA200 needs warm-up)
+BULLISH_ONLY = os.getenv("BULLISH_ONLY", "1") == "1"   # True: only EMA20 crossing ABOVE EMA200
 LOOKBACK = 2                    # check the last N closed candles (covers a slow scan)
 REQS_PER_SEC = 25               # sources disagree (300 or 500 per 10 s per endpoint) -> stay well below both
 REFRESH_SYMBOLS_EVERY = 3600    # seconds
+
+# --- "utility coins only" filter ---
+HERE = Path(__file__).resolve().parent
+BLOCKLIST_FILE = Path(os.getenv("BLOCKLIST_FILE", HERE / "blocklist.txt"))
+ALLOWLIST_FILE = Path(os.getenv("ALLOWLIST_FILE", HERE / "allowlist.txt"))
+STABLECOINS = {"USDC", "FDUSD", "TUSD", "USDD", "USDE", "DAI", "PYUSD", "USD1", "BUSD", "USDP", "EURC", "USDJ"}
+LEVERAGED_RE = re.compile(r".+\d+[LS]$")                 # TOMO3L, BTC5S, ...
+# whole-word match against MEXC's fullName + conceptPlates tags (so "Ondo" the coin is NOT excluded)
+NON_UTILITY_RE = re.compile(r"\b(?:tokenized|xstocks?|stocks?|etfs?|equity|equities)\b", re.I)
+EXCLUDE_PLATES = {p.strip().lower() for p in os.getenv("EXCLUDE_PLATES", "").split(",") if p.strip()}
 
 DESKTOP_NOTIFY = os.getenv("DESKTOP_NOTIFY", "1") == "1"
 LOG_FILE = os.getenv("ALERT_LOG", "alerts.log")
@@ -115,7 +134,7 @@ def find_crosses(rows, now_ms=None):
             continue
         if prev <= 0 < curr:
             found.append(("UP", rows[i][0], closes[i]))
-        elif prev >= 0 > curr:
+        elif prev >= 0 > curr and not BULLISH_ONLY:
             found.append(("DOWN", rows[i][0], closes[i]))
     return found
 
@@ -129,22 +148,110 @@ def check_symbol(symbol):
         return symbol, []
 
 
-def get_symbols():
+def read_list(path):
+    """Read a coin list file: one coin per line, '#' starts a comment. Accepts HIMSON or HIMSONUSDT."""
+    if not path.exists():
+        return set()
+    out = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#")[0].strip().upper()
+        if line:
+            out.add(line[: -len(QUOTE)] if line.endswith(QUOTE) and len(line) > len(QUOTE) else line)
+    return out
+
+
+def exclusion_reason(info, blocklist):
+    """Why a coin is NOT a utility coin (None = keep it)."""
+    base = info["baseAsset"].upper()
+    if base in blocklist:
+        return "in blocklist.txt"
+    if base in STABLECOINS:
+        return "stablecoin"
+    if LEVERAGED_RE.match(base):
+        return "leveraged token"
+    plates = info.get("conceptPlates") or []
+    for plate in plates:
+        if plate.lower() in EXCLUDE_PLATES:
+            return f"category '{plate}' (EXCLUDE_PLATES)"
+    m = NON_UTILITY_RE.search(" ".join([info.get("fullName") or ""] + list(plates)))
+    if m:
+        return f"tagged '{m.group(0)}' (stock/ETF token)"
+    return None
+
+
+def load_universe():
+    """Returns (kept_symbols, {excluded_symbol: reason}, allowlist_names_not_found)."""
     info = get("/api/v3/exchangeInfo")
-    tradable = {
-        s["symbol"]
-        for s in info["symbols"]
-        if s.get("quoteAsset") == QUOTE
-        and s.get("isSpotTradingAllowed", True)
-        and str(s.get("status")).upper() in ("1", "ENABLED")
-    }
+    blocklist, allowlist = read_list(BLOCKLIST_FILE), read_list(ALLOWLIST_FILE)
+    kept, excluded, seen = [], {}, set()
+    for s in info["symbols"]:
+        if (s.get("quoteAsset") != QUOTE or not s.get("isSpotTradingAllowed", True)
+                or str(s.get("status")).upper() not in ("1", "ENABLED")):
+            continue
+        base = s["baseAsset"].upper()
+        if allowlist:                                   # strict mode: only the coins you listed
+            if base in allowlist:
+                kept.append(s["symbol"]); seen.add(base)
+            continue
+        reason = exclusion_reason(s, blocklist)
+        if reason:
+            excluded[s["symbol"]] = reason
+        else:
+            kept.append(s["symbol"])
+    return kept, excluded, sorted(allowlist - seen)
+
+
+def get_symbols():
+    kept, excluded, missing = load_universe()
+    if missing:
+        print(f"[warn] allowlist coins not found as tradable {QUOTE} pairs: {', '.join(missing)}")
     tickers = get("/api/v3/ticker/24hr")
     liquid = {
         t["symbol"]
         for t in tickers
         if float(t.get("quoteVolume") or 0) >= MIN_24H_QUOTE_VOLUME
     }
-    return sorted(tradable & liquid)
+    symbols = sorted(set(kept) & liquid)
+    print(f"Filter: {len(excluded)} non-utility pairs excluded, {len(kept)} kept, "
+          f"{len(symbols)} pass the volume filter")
+    return symbols
+
+
+def dry_run():
+    kept, excluded, missing = load_universe()
+    print(f"\nKEPT: {len(kept)} pairs   EXCLUDED: {len(excluded)} pairs\n")
+    for sym, why in sorted(excluded.items()):
+        print(f"  excluded  {sym:<18} {why}")
+    if missing:
+        print(f"\n[warn] allowlist coins not found: {', '.join(missing)}")
+    print("\nIf a stock token is still in KEPT, add its base asset to blocklist.txt "
+          "(or use --inspect to find the category MEXC puts it in).")
+
+
+def inspect_tags(args):
+    """Show how MEXC describes specific coins, and every category tag with example coins."""
+    info = get("/api/v3/exchangeInfo")
+    rows = [s for s in info["symbols"] if s.get("quoteAsset") == QUOTE]
+    by_symbol = {s["symbol"]: s for s in rows}
+    wanted = args or ["HIMSONUSDT", "TTMIONUSDT", "VSTONUSDT", "MAGMAUSDT", "TNSRUSDT"]
+    blocklist = read_list(BLOCKLIST_FILE)
+    print("\n== Coins you asked about ==")
+    for sym in wanted:
+        sym = sym if sym.endswith(QUOTE) else sym + QUOTE
+        s = by_symbol.get(sym)
+        if not s:
+            print(f"{sym}: not found"); continue
+        print(f"{sym}\n    fullName: {s.get('fullName')}\n    conceptPlates: {s.get('conceptPlates')}"
+              f"\n    contractAddress: {s.get('contractAddress')}"
+              f"\n    filter verdict: {exclusion_reason(s, blocklist) or 'KEPT (treated as utility)'}")
+    groups = {}
+    for s in rows:
+        for plate in (s.get("conceptPlates") or ["(no tag)"]):
+            groups.setdefault(plate, []).append(s["baseAsset"])
+    print("\n== All category tags on MEXC (count, tag, examples) ==")
+    for plate, bases in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        print(f"{len(bases):6d}  {plate:<42} {', '.join(bases[:6])}")
+    print("\nTo exclude a whole tag:  EXCLUDE_PLATES=<tag>[,<tag>]  (exact text from the list above)")
 
 
 def format_alert(symbol, direction, candle_ms, price):
@@ -226,6 +333,10 @@ def default_on_signal(symbol, direction, candle_ms, price):
 
 
 def main(on_signal=default_on_signal):
+    if "--dry-run" in sys.argv:
+        return dry_run()
+    if "--inspect" in sys.argv:
+        return inspect_tags([a.upper() for a in sys.argv[sys.argv.index("--inspect") + 1:] if not a.startswith("-")])
     if "--test" in sys.argv:
         notify("🟢 TEST: if you can see/hear this, alerts work.")
         return
