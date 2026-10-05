@@ -828,3 +828,405 @@ https://www.mexc.com/exchange/QUBIC_USDT
 1m candle 12:23 | close 0.01509
 https://www.mexc.com/exchange/YOM_USDT
 [2026-10-03 12:35:31] Scanner started.
+[2026-10-05 08:28:50] Scanner started.
+[2026-10-05 08:29:02] Scanner started.
+[2026-10-05 08:30:09] 🟢 BIOFIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:28 | close 4.257e-05
+https://www.mexc.com/exchange/BIOFI_USDT
+[2026-10-05 08:30:13] 🟢 CREPE1USDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:28 | close 9.443e-06
+https://www.mexc.com/exchange/CREPE1_USDT
+[2026-10-05 08:30:20] 🟢 HYPEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:29 | close 90.62
+https://www.mexc.com/exchange/HYPE_USDT
+[2026-10-05 08:30:26] 🟢 MXNAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:28 | close 0.005345
+https://www.mexc.com/exchange/MXNA_USDT
+[2026-10-05 08:30:29] 🟢 PMTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:29 | close 0.09922
+https://www.mexc.com/exchange/PMT_USDT
+[2026-10-05 08:30:30] 🟢 PPOLYUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:29 | close 16.98
+https://www.mexc.com/exchange/PPOLY_USDT
+[2026-10-05 08:30:36] 🟢 SYSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:28 | close 0.002071
+https://www.mexc.com/exchange/SYS_USDT
+[2026-10-05 08:31:17] 🟢 GHXUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:30 | close 0.011543
+https://www.mexc.com/exchange/GHX_USDT
+[2026-10-05 08:31:29] 🟢 PROPSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:30 | close 0.007206
+https://www.mexc.com/exchange/PROPS_USDT
+[2026-10-05 08:31:33] 🟢 SMARSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:30 | close 4.675e-09
+https://www.mexc.com/exchange/SMARS_USDT
+[2026-10-05 08:32:03] 🟢 ADIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 8.0981
+https://www.mexc.com/exchange/ADI_USDT
+[2026-10-05 08:32:04] 🟢 ALEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 0.27
+https://www.mexc.com/exchange/ALE_USDT
+[2026-10-05 08:32:13] 🟢 DIAMUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 0.005015
+https://www.mexc.com/exchange/DIAM_USDT
+[2026-10-05 08:32:15] 🟢 ERAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 0.06616
+https://www.mexc.com/exchange/ERA_USDT
+[2026-10-05 08:32:17] 🟢 GEMSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 0.00323
+https://www.mexc.com/exchange/GEMS_USDT
+[2026-10-05 08:32:30] 🟢 REEFUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:31 | close 3.591e-05
+https://www.mexc.com/exchange/REEF_USDT
+[2026-10-05 08:33:04] 🟢 AMPUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 0.0006335
+https://www.mexc.com/exchange/AMP_USDT
+[2026-10-05 08:33:10] 🟢 CAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 0.25505
+https://www.mexc.com/exchange/CA_USDT
+[2026-10-05 08:33:14] 🟢 DOTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 1.2186
+https://www.mexc.com/exchange/DOT_USDT
+[2026-10-05 08:33:23] 🟢 METISUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 3.394
+https://www.mexc.com/exchange/METIS_USDT
+[2026-10-05 08:33:24] 🟢 MEYUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 0.06349
+https://www.mexc.com/exchange/MEY_USDT
+[2026-10-05 08:33:25] 🟢 NAPUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 0.2072
+https://www.mexc.com/exchange/NAP_USDT
+[2026-10-05 08:33:28] 🟢 PMTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 0.09922
+https://www.mexc.com/exchange/PMT_USDT
+[2026-10-05 08:33:30] 🟢 QNTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:32 | close 253.28
+https://www.mexc.com/exchange/QNT_USDT
+[2026-10-05 08:34:12] 🟢 COTIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 0.014054
+https://www.mexc.com/exchange/COTI_USDT
+[2026-10-05 08:34:13] 🟢 DASHUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 59.85
+https://www.mexc.com/exchange/DASH_USDT
+[2026-10-05 08:34:21] 🟢 KISHUUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 8.391e-11
+https://www.mexc.com/exchange/KISHU_USDT
+[2026-10-05 08:34:35] 🟢 SYSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 0.002072
+https://www.mexc.com/exchange/SYS_USDT
+[2026-10-05 08:34:35] 🟢 TAIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 0.004281
+https://www.mexc.com/exchange/TAI_USDT
+[2026-10-05 08:34:38] 🟢 VISTAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:33 | close 0.435
+https://www.mexc.com/exchange/VISTA_USDT
+[2026-10-05 08:35:03] 🟢 AFCUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:34 | close 0.1546
+https://www.mexc.com/exchange/AFC_USDT
+[2026-10-05 08:35:04] 🟢 AMEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:34 | close 0.0002736
+https://www.mexc.com/exchange/AME_USDT
+[2026-10-05 08:35:40] 🟢 XUSDUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:34 | close 1.0009
+https://www.mexc.com/exchange/XUSD_USDT
+[2026-10-05 08:36:22] 🟢 LONGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:35 | close 0.0009383
+https://www.mexc.com/exchange/LONG_USDT
+[2026-10-05 08:36:27] 🟢 PAALUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:35 | close 0.012064
+https://www.mexc.com/exchange/PAAL_USDT
+[2026-10-05 08:36:38] 🟢 USATUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:35 | close 0.9999
+https://www.mexc.com/exchange/USAT_USDT
+[2026-10-05 08:36:39] 🟢 XCXUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:35 | close 0.0029587
+https://www.mexc.com/exchange/XCX_USDT
+[2026-10-05 08:37:16] 🟢 FTTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:36 | close 0.2565
+https://www.mexc.com/exchange/FTT_USDT
+[2026-10-05 08:37:32] 🟢 RIONUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:36 | close 0.1417
+https://www.mexc.com/exchange/RION_USDT
+[2026-10-05 08:38:07] 🟢 AVVUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 0.008534
+https://www.mexc.com/exchange/AVV_USDT
+[2026-10-05 08:38:10] 🟢 CATUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 2.305e-06
+https://www.mexc.com/exchange/CAT_USDT
+[2026-10-05 08:38:26] 🟢 OMGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 0.05089
+https://www.mexc.com/exchange/OMG_USDT
+[2026-10-05 08:38:32] 🟢 SCRUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 0.03023
+https://www.mexc.com/exchange/SCR_USDT
+[2026-10-05 08:38:39] 🟢 USDUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 1.0003
+https://www.mexc.com/exchange/USD_USDT
+[2026-10-05 08:38:41] 🟢 XYOUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:37 | close 0.00378
+https://www.mexc.com/exchange/XYO_USDT
+[2026-10-05 08:39:18] 🟢 HBARUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:38 | close 0.1045
+https://www.mexc.com/exchange/HBAR_USDT
+[2026-10-05 08:39:24] 🟢 MINAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:38 | close 0.15877
+https://www.mexc.com/exchange/MINA_USDT
+[2026-10-05 08:39:27] 🟢 PEAQUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:38 | close 0.04649
+https://www.mexc.com/exchange/PEAQ_USDT
+[2026-10-05 08:40:05] 🟢 ARCAIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:39 | close 0.002177
+https://www.mexc.com/exchange/ARCAI_USDT
+[2026-10-05 08:40:06] 🟢 AUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:39 | close 0.09816
+https://www.mexc.com/exchange/A_USDT
+[2026-10-05 08:40:13] 🟢 DOGEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:39 | close 0.09644
+https://www.mexc.com/exchange/DOGE_USDT
+[2026-10-05 08:40:33] 🟢 SNTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:39 | close 0.00856
+https://www.mexc.com/exchange/SNT_USDT
+[2026-10-05 08:41:04] 🟢 AGIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:40 | close 0.006809
+https://www.mexc.com/exchange/AGI_USDT
+[2026-10-05 08:41:26] 🟢 NETXUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:40 | close 0.1724
+https://www.mexc.com/exchange/NETX_USDT
+[2026-10-05 08:41:28] 🟢 OWLUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:40 | close 0.0013411
+https://www.mexc.com/exchange/OWL_USDT
+[2026-10-05 08:41:28] 🟢 PAALUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:40 | close 0.012054
+https://www.mexc.com/exchange/PAAL_USDT
+[2026-10-05 08:41:31] 🟢 RESOLVUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 08:40 | close 0.01953
+https://www.mexc.com/exchange/RESOLV_USDT
+[2026-10-05 09:59:58] Scanner started.
+[2026-10-05 10:00:11] 🟢 BRLUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:58 | close 0.1924
+https://www.mexc.com/exchange/BRL_USDT
+[2026-10-05 10:00:21] 🟢 ICNTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:58 | close 0.09943
+https://www.mexc.com/exchange/ICNT_USDT
+[2026-10-05 10:00:25] 🟢 MBGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:59 | close 0.1035
+https://www.mexc.com/exchange/MBG_USDT
+[2026-10-05 10:00:31] 🟢 PORTOUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:59 | close 0.4586
+https://www.mexc.com/exchange/PORTO_USDT
+[2026-10-05 10:00:31] 🟢 PROSPERUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:59 | close 0.0276
+https://www.mexc.com/exchange/PROSPER_USDT
+[2026-10-05 10:00:32] 🟢 PUMPUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:58 | close 0.006424
+https://www.mexc.com/exchange/PUMP_USDT
+[2026-10-05 10:00:32] 🟢 QUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 09:58 | close 0.021309
+https://www.mexc.com/exchange/Q_USDT
+[2026-10-05 10:01:11] 🟢 BZZUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:00 | close 0.0509
+https://www.mexc.com/exchange/BZZ_USDT
+[2026-10-05 10:01:18] 🟢 HFTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:00 | close 0.007126
+https://www.mexc.com/exchange/HFT_USDT
+[2026-10-05 10:02:08] 🟢 BIOFIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:00 | close 4.25e-05
+https://www.mexc.com/exchange/BIOFI_USDT
+[2026-10-05 10:02:11] 🟢 CKUSDTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 1.0003
+https://www.mexc.com/exchange/CKUSDT_USDT
+[2026-10-05 10:02:14] 🟢 DOTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 1.2164
+https://www.mexc.com/exchange/DOT_USDT
+[2026-10-05 10:02:24] 🟢 MXNAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 0.005345
+https://www.mexc.com/exchange/MXNA_USDT
+[2026-10-05 10:02:26] 🟢 OMGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 0.05096
+https://www.mexc.com/exchange/OMG_USDT
+[2026-10-05 10:02:32] 🟢 SDUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 0.12024
+https://www.mexc.com/exchange/SD_USDT
+[2026-10-05 10:02:48] 🟢 VISTAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:01 | close 0.4359
+https://www.mexc.com/exchange/VISTA_USDT
+[2026-10-05 10:03:03] 🟢 ADIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:02 | close 8.1023
+https://www.mexc.com/exchange/ADI_USDT
+[2026-10-05 10:03:23] 🟢 MEGAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:02 | close 0.04927
+https://www.mexc.com/exchange/MEGA_USDT
+[2026-10-05 10:03:29] 🟢 PPOLYUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:02 | close 17.02
+https://www.mexc.com/exchange/PPOLY_USDT
+[2026-10-05 10:03:30] 🟢 RBNTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:02 | close 0.002617
+https://www.mexc.com/exchange/RBNT_USDT
+[2026-10-05 10:04:05] 🟢 ARCAIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 0.002179
+https://www.mexc.com/exchange/ARCAI_USDT
+[2026-10-05 10:04:10] 🟢 CELOUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 0.10553
+https://www.mexc.com/exchange/CELO_USDT
+[2026-10-05 10:04:15] 🟢 ESPORTSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 0.02015
+https://www.mexc.com/exchange/ESPORTS_USDT
+[2026-10-05 10:04:23] 🟢 MANYUUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 3.835e-09
+https://www.mexc.com/exchange/MANYU_USDT
+[2026-10-05 10:04:27] 🟢 OPGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 0.13528
+https://www.mexc.com/exchange/OPG_USDT
+[2026-10-05 10:04:42] 🟢 ZBCNUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:03 | close 0.0025593
+https://www.mexc.com/exchange/ZBCN_USDT
+[2026-10-05 10:05:13] 🟢 DELTAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.016424
+https://www.mexc.com/exchange/DELTA_USDT
+[2026-10-05 10:05:14] 🟢 ELIZAOSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.0001617
+https://www.mexc.com/exchange/ELIZAOS_USDT
+[2026-10-05 10:05:24] 🟢 MOGUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 1.2133e-07
+https://www.mexc.com/exchange/MOG_USDT
+[2026-10-05 10:05:29] 🟢 POWERUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.08572
+https://www.mexc.com/exchange/POWER_USDT
+[2026-10-05 10:05:30] 🟢 QUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.021308
+https://www.mexc.com/exchange/Q_USDT
+[2026-10-05 10:05:32] 🟢 SENTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.02325
+https://www.mexc.com/exchange/SENT_USDT
+[2026-10-05 10:05:42] 🟢 ZETAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:04 | close 0.05097
+https://www.mexc.com/exchange/ZETA_USDT
+[2026-10-05 10:06:06] 🟢 ATUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 0.12799
+https://www.mexc.com/exchange/AT_USDT
+[2026-10-05 10:06:25] 🟢 NEARUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 4.975
+https://www.mexc.com/exchange/NEAR_USDT
+[2026-10-05 10:06:25] 🟢 NLSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 0.00374
+https://www.mexc.com/exchange/NLS_USDT
+[2026-10-05 10:06:28] 🟢 PNICUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 0.001238
+https://www.mexc.com/exchange/PNIC_USDT
+[2026-10-05 10:06:33] 🟢 SHXUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 0.007505
+https://www.mexc.com/exchange/SHX_USDT
+[2026-10-05 10:06:33] 🟢 SEIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 0.07382
+https://www.mexc.com/exchange/SEI_USDT
+[2026-10-05 10:06:40] 🟢 XENUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:05 | close 5.447e-09
+https://www.mexc.com/exchange/XEN_USDT
+[2026-10-05 10:07:06] 🟢 ARCAIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:06 | close 0.002269
+https://www.mexc.com/exchange/ARCAI_USDT
+[2026-10-05 10:07:06] 🟢 APEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:06 | close 0.1691
+https://www.mexc.com/exchange/APE_USDT
+[2026-10-05 10:07:14] 🟢 DIAMUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:06 | close 0.005013
+https://www.mexc.com/exchange/DIAM_USDT
+[2026-10-05 10:07:26] 🟢 MYROUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:06 | close 0.002256
+https://www.mexc.com/exchange/MYRO_USDT
+[2026-10-05 10:07:42] 🟢 ZCUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:06 | close 0.033898
+https://www.mexc.com/exchange/ZC_USDT
+[2026-10-05 10:08:03] 🟢 ADAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.2678
+https://www.mexc.com/exchange/ADA_USDT
+[2026-10-05 10:08:06] 🟢 ARUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 4.48
+https://www.mexc.com/exchange/AR_USDT
+[2026-10-05 10:08:10] 🟢 CAPINFRAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.08198
+https://www.mexc.com/exchange/CAPINFRA_USDT
+[2026-10-05 10:08:14] 🟢 ELUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.001841
+https://www.mexc.com/exchange/EL_USDT
+[2026-10-05 10:08:24] 🟢 MOEUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.005244
+https://www.mexc.com/exchange/MOE_USDT
+[2026-10-05 10:08:24] 🟢 MOVRUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 1.7572
+https://www.mexc.com/exchange/MOVR_USDT
+[2026-10-05 10:08:25] 🟢 NEARLYUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.00459
+https://www.mexc.com/exchange/NEARLY_USDT
+[2026-10-05 10:08:31] 🟢 RSCUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.05392
+https://www.mexc.com/exchange/RSC_USDT
+[2026-10-05 10:08:33] 🟢 SOSOUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:07 | close 0.3025
+https://www.mexc.com/exchange/SOSO_USDT
+[2026-10-05 10:09:06] 🟢 ASTEROID1USDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.001633
+https://www.mexc.com/exchange/ASTEROID1_USDT
+[2026-10-05 10:09:08] 🟢 BFTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.0010255
+https://www.mexc.com/exchange/BFT_USDT
+[2026-10-05 10:09:09] 🟢 BOBAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.02207
+https://www.mexc.com/exchange/BOBA_USDT
+[2026-10-05 10:09:20] 🟢 JMDTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 1.3445
+https://www.mexc.com/exchange/JMDT_USDT
+[2026-10-05 10:09:23] 🟢 MERLUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.03131
+https://www.mexc.com/exchange/MERL_USDT
+[2026-10-05 10:09:24] 🟢 MXNAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.005344
+https://www.mexc.com/exchange/MXNA_USDT
+[2026-10-05 10:09:31] 🟢 RIVERUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 1.2245
+https://www.mexc.com/exchange/RIVER_USDT
+[2026-10-05 10:09:39] 🟢 WUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:08 | close 0.014559
+https://www.mexc.com/exchange/W_USDT
+[2026-10-05 10:10:04] 🟢 ALCHUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 0.04952
+https://www.mexc.com/exchange/ALCH_USDT
+[2026-10-05 10:10:08] 🟢 BIOFIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 4.251e-05
+https://www.mexc.com/exchange/BIOFI_USDT
+[2026-10-05 10:10:22] 🟢 MANAUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 0.10272
+https://www.mexc.com/exchange/MANA_USDT
+[2026-10-05 10:10:30] 🟢 QNTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 253.71
+https://www.mexc.com/exchange/QNT_USDT
+[2026-10-05 10:10:35] 🟢 TACUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 0.001543
+https://www.mexc.com/exchange/TAC_USDT
+[2026-10-05 10:10:37] 🟢 UPUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 0.19596
+https://www.mexc.com/exchange/UP_USDT
+[2026-10-05 10:10:37] 🟢 USATUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:09 | close 0.9999
+https://www.mexc.com/exchange/USAT_USDT
+[2026-10-05 10:11:09] 🟢 BSBUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 0.10339
+https://www.mexc.com/exchange/BSB_USDT
+[2026-10-05 10:11:13] 🟢 DOSUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 0.21488
+https://www.mexc.com/exchange/DOS_USDT
+[2026-10-05 10:11:15] 🟢 EULUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 1.4619
+https://www.mexc.com/exchange/EUL_USDT
+[2026-10-05 10:11:16] 🟢 FLOKIUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 2.896e-05
+https://www.mexc.com/exchange/FLOKI_USDT
+[2026-10-05 10:11:25] 🟢 NIGHTUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 0.04532
+https://www.mexc.com/exchange/NIGHT_USDT
+[2026-10-05 10:12:04] 🟢 ANDYETHUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:11 | close 1.3056e-05
+https://www.mexc.com/exchange/ANDYETH_USDT
+[2026-10-05 10:12:10] 🟢 BUSDT: EMA20 crossed ABOVE EMA200 (bullish)
+1m candle 10:10 | close 0.18079
+https://www.mexc.com/exchange/B_USDT
