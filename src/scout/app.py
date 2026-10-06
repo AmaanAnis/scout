@@ -17,19 +17,19 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 QUOTE = "USDT"
-TOP_COINS = int(os.getenv("TOP_COINS", "300"))
+TOP_COINS = int(os.getenv("TOP_COINS", "0"))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "50000"))
 FAST, SLOW = 20, 200
 INTERVAL = "1m"
 CANDLES = 1000
 LOOKBACK = 3
 LIQUIDITY_WINDOW = 60
-MIN_HOURLY_QUOTE_VOLUME = float(os.getenv("MIN_HOURLY_QUOTE_VOLUME", "5000"))
-MIN_ACTIVE_MINUTES = int(os.getenv("MIN_ACTIVE_MINUTES", "40"))
-MIN_RANGE_PCT = float(os.getenv("MIN_RANGE_PCT", "0.02"))
-MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.20"))
+MIN_BOX_PCT = float(os.getenv("MIN_BOX_PCT", "0.8"))
+MIN_ACTIVE_MINUTES = int(os.getenv("MIN_ACTIVE_MINUTES", "30"))
+MIN_HOURLY_QUOTE_VOLUME = float(os.getenv("MIN_HOURLY_QUOTE_VOLUME", "0"))
+MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0"))
 BUYER_WINDOW_MIN = int(os.getenv("BUYER_WINDOW_MIN", "15"))
-MIN_BUY_RATIO = float(os.getenv("MIN_BUY_RATIO", "0.55"))
+MIN_BUY_RATIO = float(os.getenv("MIN_BUY_RATIO", "0"))
 MIN_TAPE_TRADES = int(os.getenv("MIN_TAPE_TRADES", "30"))
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 REQS_PER_SEC = float(os.getenv("REQS_PER_SEC", "25"))
@@ -281,32 +281,34 @@ def ema(values, length):
 
 def liquidity_stats(rows, i):
     start = int(rows[i][0]) - (LIQUIDITY_WINDOW - 1) * 60_000
-    traded = range_sum = 0.0
-    active = n = 0
+    traded = 0.0
+    active = 0
+    high, low = 0.0, float("inf")
     j = i
     while j >= 0 and int(rows[j][0]) >= start:
         r = rows[j]
-        vol, close = float(r[5]), float(r[4])
-        traded += float(r[7]) if len(r) > 7 else vol * close
+        vol = float(r[5])
+        traded += float(r[7]) if len(r) > 7 else vol * float(r[4])
         if vol > 0:
             active += 1
-        if close > 0:
-            range_sum += (float(r[2]) - float(r[3])) / close
-            n += 1
+        if float(r[3]) > 0:
+            high, low = max(high, float(r[2])), min(low, float(r[3]))
         j -= 1
-    return {"traded": traded, "active": active,
-            "range_pct": range_sum / n * 100 if n else 0.0, "spread_pct": None}
+    close = float(rows[i][4])
+    box = (high - low) / close * 100 if close > 0 and low != float("inf") else 0.0
+    return {"traded": traded, "active": active, "box_pct": box, "spread_pct": None}
 
 
 def liquidity_reject(stats):
-    if stats["traded"] < MIN_HOURLY_QUOTE_VOLUME:
+    if stats["active"] < MIN_ACTIVE_MINUTES:
+        return (f"dead: trades in only {stats['active']} of the last {LIQUIDITY_WINDOW} minutes "
+                f"(min {MIN_ACTIVE_MINUTES})")
+    if stats["box_pct"] < MIN_BOX_PCT:
+        return (f"sideways: price stayed inside a {stats['box_pct']:.2f}% box for the last "
+                f"{LIQUIDITY_WINDOW} min (min {MIN_BOX_PCT}%)")
+    if MIN_HOURLY_QUOTE_VOLUME > 0 and stats["traded"] < MIN_HOURLY_QUOTE_VOLUME:
         return (f"low volume: only ${stats['traded']:,.0f} traded in the last {LIQUIDITY_WINDOW} min "
                 f"(min ${MIN_HOURLY_QUOTE_VOLUME:,.0f})")
-    if stats["active"] < MIN_ACTIVE_MINUTES:
-        return (f"few trades: trades in only {stats['active']} of the last {LIQUIDITY_WINDOW} minutes "
-                f"(min {MIN_ACTIVE_MINUTES})")
-    if stats["range_pct"] < MIN_RANGE_PCT:
-        return f"flat/pegged: average 1m range {stats['range_pct']:.3f}% (min {MIN_RANGE_PCT}%)"
     return None
 
 
@@ -372,21 +374,23 @@ def buyers_reject(stats):
 
 def verify(symbol, cross):
     stats = cross["stats"]
-    try:
-        stats["spread_pct"] = spread_pct(symbol)
-    except Exception as e:
-        cross["reject"] = f"unverified: spread unavailable ({e})"
-        return
-    if stats["spread_pct"] > MAX_SPREAD_PCT:
-        shown = "no bids or no asks" if stats["spread_pct"] == float("inf") else f"{stats['spread_pct']:.2f}%"
-        cross["reject"] = f"wide spread: {shown} (max {MAX_SPREAD_PCT}%)"
-        return
-    try:
-        stats.update(buyer_stats(symbol))
-    except Exception as e:
-        cross["reject"] = f"unverified: trades unavailable ({e})"
-        return
-    cross["reject"] = buyers_reject(stats)
+    if MAX_SPREAD_PCT > 0:
+        try:
+            stats["spread_pct"] = spread_pct(symbol)
+        except Exception as e:
+            cross["reject"] = f"unverified: spread unavailable ({e})"
+            return
+        if stats["spread_pct"] > MAX_SPREAD_PCT:
+            shown = "no bids or no asks" if stats["spread_pct"] == float("inf") else f"{stats['spread_pct']:.2f}%"
+            cross["reject"] = f"wide spread: {shown} (max {MAX_SPREAD_PCT}%)"
+            return
+    if MIN_BUY_RATIO > 0:
+        try:
+            stats.update(buyer_stats(symbol))
+        except Exception as e:
+            cross["reject"] = f"unverified: trades unavailable ({e})"
+            return
+        cross["reject"] = buyers_reject(stats)
 
 
 STATE = {}
@@ -500,10 +504,11 @@ def format_alert(symbol, candle_ms, price, stats=None):
              f"1m candle {t} | close {price}"]
     if stats:
         rank = RANK.get(symbol)
-        value = f"last {LIQUIDITY_WINDOW} min ${stats['traded']:,.0f} ({stats['active']}/{LIQUIDITY_WINDOW} active minutes)"
+        value = (f"last {LIQUIDITY_WINDOW} min: moved {stats['box_pct']:.2f}%, ${stats['traded']:,.0f} traded, "
+                 f"{stats['active']}/{LIQUIDITY_WINDOW} active minutes")
         if rank:
             value = f"24h ${rank[1]:,.0f} (#{rank[0]} of {rank[2]}) | " + value
-        lines.append("Value: " + value)
+        lines.append(value)
         parts = []
         if stats.get("ratio") is not None:
             parts.append(f"Buyers: {stats['ratio'] * 100:.0f}% of traded value is buying "
