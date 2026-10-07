@@ -2,6 +2,7 @@ import hmac
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import time
 import webbrowser
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import requests
 import uvicorn
@@ -19,6 +21,8 @@ from pydantic import BaseModel, Field
 QUOTE = "USDT"
 TOP_COINS = int(os.getenv("TOP_COINS", "0"))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "50000"))
+MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
+MAX_PRICE = float(os.getenv("MAX_PRICE", "0"))
 FAST, SLOW = 20, 200
 INTERVAL = "1m"
 CANDLES = 1000
@@ -32,7 +36,8 @@ BUYER_WINDOW_MIN = int(os.getenv("BUYER_WINDOW_MIN", "15"))
 MIN_BUY_RATIO = float(os.getenv("MIN_BUY_RATIO", "0"))
 MIN_TAPE_TRADES = int(os.getenv("MIN_TAPE_TRADES", "30"))
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
-REQS_PER_SEC = float(os.getenv("REQS_PER_SEC", "25"))
+REQS_PER_SEC = float(os.getenv("REQS_PER_SEC", "30"))
+WEIGHT_SOFT_LIMIT = int(os.getenv("WEIGHT_SOFT_LIMIT", "4800"))
 REFRESH_SYMBOLS_EVERY = 3600
 SCAN_DELAY = float(os.getenv("SCAN_DELAY", "2"))
 NEAR_PCT = float(os.getenv("NEAR_PCT", "0.05"))
@@ -50,9 +55,30 @@ ALERT_PORT = int(os.getenv("ALERT_PORT", "8000"))
 ALERT_TOKEN = os.getenv("ALERT_TOKEN", "")
 LOCAL_SERVER_URL = os.getenv("LOCAL_SERVER_URL", f"http://127.0.0.1:{ALERT_PORT}/alert")
 TV_LAYOUT_ID = os.getenv("TV_LAYOUT_ID", "")
+TV_EXCHANGE = os.getenv("TV_EXCHANGE", "BINANCE")
 TEST_WAIT = float(os.getenv("TEST_WAIT", "30"))
 
-BASE = "https://api.mexc.com"
+EXCLUDE_COINS = {c.strip().upper() for c in os.getenv("EXCLUDE_COINS", "").split(",") if c.strip()}
+KEEP_COINS = {c.strip().upper() for c in os.getenv("KEEP_COINS", "").split(",") if c.strip()}
+USE_BINANCE_TAGS = os.getenv("USE_BINANCE_TAGS", "1") == "1"
+TAGS_CACHE = Path(os.getenv("TAGS_CACHE", Path(__file__).resolve().parent / "binance_tags.json"))
+TAGS_TTL = 24 * 3600
+TAGS_URL = "https://www.binance.com/bapi/asset/v2/public/asset-service/product/get-products?includeEtf=true"
+STABLECOINS = {"USDC", "FDUSD", "TUSD", "USDP", "USDE", "DAI", "PYUSD", "USD1", "BFUSD", "RLUSD", "EURI",
+               "EUR", "AEUR", "XUSD", "USDS"}
+MICRO_RE = re.compile(r"^(1000|1M)[A-Z0-9]")
+MEME_SEED = {
+    "DOGE", "SHIB", "PEPE", "BONK", "WIF", "FLOKI", "BRETT", "POPCAT", "MOG", "TURBO", "NEIRO", "BOME",
+    "MEME", "PNUT", "GOAT", "FARTCOIN", "MOODENG", "TRUMP", "MELANIA", "BABYDOGE", "DOGS", "CATI",
+    "HMSTR", "MYRO", "SLERF", "MEW", "GIGA", "TOSHI", "MICHI", "SNEK", "WOJAK", "BOBO", "SAMO", "AKITA",
+    "KISHU", "ELON", "PONKE", "MUMU", "MAGA", "DEGEN", "FWOG", "MOTHER", "WEN", "PEOPLE", "ACT", "LUNC",
+}
+BINANCE_BASES = ([os.environ["BINANCE_BASE"].rstrip("/")] if os.getenv("BINANCE_BASE") else
+                 ["https://api.binance.com", "https://api-gcp.binance.com", "https://api1.binance.com",
+                  "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com",
+                  "https://data-api.binance.vision"])
+
+BASE = BINANCE_BASES[0]
 session = requests.Session()
 local_session = requests.Session()
 local_session.trust_env = False
@@ -100,7 +126,7 @@ def _linux_popup(title, text, url):
         return False
     if url and _notify_send_supports_actions():
         proc = subprocess.Popen(
-            ["notify-send", "--app-name=MEXC scanner", "-t", "60000", "--wait",
+            ["notify-send", "--app-name=Crypto scanner", "-t", "60000", "--wait",
              "-A", "default=Open chart", "-A", "open=Open in TradingView", "--", title, text],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
@@ -209,7 +235,7 @@ def send_local_server(title, text, url=""):
     return shown
 
 
-def notify(text, title="MEXC bullish cross", url=""):
+def notify(text, title="Binance bullish cross", url=""):
     print(text, flush=True)
     if USE_SERVER and send_local_server(title, text, url):
         return
@@ -240,29 +266,72 @@ class RateLimiter:
 
 limiter = RateLimiter(REQS_PER_SEC)
 _cooldown_until = 0.0
+_ban_until = 0.0
 _cooldown_lock = threading.Lock()
 
 
+def retry_after(headers, default):
+    try:
+        return float(headers.get("Retry-After", default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def pick_base():
+    global BASE
+    problems = []
+    for base in BINANCE_BASES:
+        try:
+            r = session.get(base + "/api/v3/ping", timeout=8)
+            if r.status_code == 200:
+                BASE = base
+                return base
+            problems.append(f"{base}: HTTP {r.status_code}")
+        except Exception as e:
+            problems.append(f"{base}: {type(e).__name__}")
+    raise RuntimeError("cannot reach Binance (" + "; ".join(problems) + "). HTTP 451 means Binance blocks your "
+                       "location: use a VPN, or set BINANCE_BASE=https://api.binance.us (Binance.US, fewer coins)")
+
+
 def get(path, **params):
-    global _cooldown_until
+    global _cooldown_until, _ban_until
+    if time.time() < _ban_until:
+        raise RuntimeError(f"Binance IP ban active until {time.strftime('%H:%M:%S', time.localtime(_ban_until))}; "
+                           f"not sending requests")
     for attempt in range(1, 4):
         wait = _cooldown_until - time.time()
         if wait > 0:
             time.sleep(wait)
         limiter.wait()
         r = session.get(BASE + path, params=params, timeout=10)
+        headers = getattr(r, "headers", None) or {}
+        if r.status_code == 418:
+            pause = retry_after(headers, 120)
+            _ban_until = time.time() + pause
+            print(f"[warn] Binance has temporarily banned this IP (HTTP 418) for {pause:.0f}s; "
+                  f"all requests are paused until then", flush=True)
+            raise RuntimeError("IP banned by Binance (HTTP 418)")
         if r.status_code == 429:
-            try:
-                pause = float((getattr(r, "headers", None) or {}).get("Retry-After", 5 * attempt))
-            except (TypeError, ValueError):
-                pause = 5 * attempt
-            pause = min(max(pause, 1), 60)
+            pause = min(max(retry_after(headers, 5 * attempt), 1), 120)
             with _cooldown_lock:
                 if time.time() + pause > _cooldown_until + 1:
-                    print(f"[warn] MEXC rate limit (429): pausing all requests for {pause:.0f}s")
+                    print(f"[warn] Binance rate limit (429): pausing all requests for {pause:.0f}s")
                 _cooldown_until = max(_cooldown_until, time.time() + pause)
             continue
+        if r.status_code in (403, 451):
+            raise RuntimeError(f"HTTP {r.status_code} from Binance (is your location restricted?)")
         r.raise_for_status()
+        try:
+            used = int(headers.get("X-MBX-USED-WEIGHT-1M", 0))
+        except (TypeError, ValueError):
+            used = 0
+        if used >= WEIGHT_SOFT_LIMIT:
+            with _cooldown_lock:
+                until = (int(time.time() // 60) + 1) * 60 + 1
+                if until > _cooldown_until:
+                    print(f"[warn] Binance request weight is {used}/6000 this minute; "
+                          f"slowing down until the next minute", flush=True)
+                _cooldown_until = max(_cooldown_until, until)
         return r.json()
     raise RuntimeError("still rate limited (429) after 3 tries")
 
@@ -329,8 +398,9 @@ def find_crosses(rows, now_ms=None):
         if prev is None or curr is None or not (prev <= 0 < curr):
             continue
         stats = liquidity_stats(rows, i)
+        stats.update(taker_stats(rows, i))
         found.append({"candle_ms": int(rows[i][0]), "price": closes[i],
-                      "reject": liquidity_reject(stats), "stats": stats})
+                      "reject": liquidity_reject(stats) or buyers_reject(stats), "stats": stats})
     return found
 
 
@@ -342,55 +412,45 @@ def spread_pct(symbol):
     return (ask - bid) / ((ask + bid) / 2) * 100
 
 
-def _ms(value):
-    value = int(value)
-    return value * 1000 if value < 100_000_000_000 else value
-
-
-def buyer_stats(symbol, now_ms=None):
-    now_ms = now_ms or clock_ms()
-    trades = get("/api/v3/trades", symbol=symbol, limit=1000)
-    cutoff = now_ms - BUYER_WINDOW_MIN * 60_000
-    recent = [t for t in trades if _ms(t["time"]) >= cutoff]
-    buys = [float(t["quoteQty"]) for t in recent if not t["isBuyerMaker"]]
-    sells = [float(t["quoteQty"]) for t in recent if t["isBuyerMaker"]]
-    total = sum(buys) + sum(sells)
-    times = [_ms(t["time"]) for t in recent]
-    return {"buy": sum(buys), "sell": sum(sells), "n_buy": len(buys), "n_sell": len(sells),
-            "ratio": sum(buys) / total if total > 0 else None,
-            "span_min": (max(times) - min(times)) / 60_000 if times else 0.0}
+def taker_stats(rows, i):
+    start = int(rows[i][0]) - (BUYER_WINDOW_MIN - 1) * 60_000
+    buy = total = 0.0
+    trades = 0
+    j = i
+    while j >= 0 and int(rows[j][0]) >= start:
+        r = rows[j]
+        if len(r) > 10:
+            buy += float(r[10])
+            total += float(r[7])
+            trades += int(r[8])
+        j -= 1
+    return {"ratio": buy / total if total > 0 else None, "buy": buy, "sell": max(total - buy, 0.0), "trades": trades}
 
 
 def buyers_reject(stats):
-    n = stats["n_buy"] + stats["n_sell"]
-    if n < MIN_TAPE_TRADES or stats["ratio"] is None:
-        return (f"thin tape: only {n} trades in the last {BUYER_WINDOW_MIN} min, "
+    if MIN_BUY_RATIO <= 0:
+        return None
+    if stats["ratio"] is None or stats["trades"] < MIN_TAPE_TRADES:
+        return (f"thin tape: only {stats['trades']} trades in the last {BUYER_WINDOW_MIN} min, "
                 f"cannot tell who is buying (min {MIN_TAPE_TRADES})")
     if stats["ratio"] < MIN_BUY_RATIO:
-        return (f"more sellers: only {stats['ratio'] * 100:.0f}% of traded value is buying "
+        return (f"more sellers: only {stats['ratio'] * 100:.0f}% of traded value is aggressive buying "
                 f"(min {MIN_BUY_RATIO * 100:.0f}%)")
     return None
 
 
 def verify(symbol, cross):
+    if MAX_SPREAD_PCT <= 0:
+        return
     stats = cross["stats"]
-    if MAX_SPREAD_PCT > 0:
-        try:
-            stats["spread_pct"] = spread_pct(symbol)
-        except Exception as e:
-            cross["reject"] = f"unverified: spread unavailable ({e})"
-            return
-        if stats["spread_pct"] > MAX_SPREAD_PCT:
-            shown = "no bids or no asks" if stats["spread_pct"] == float("inf") else f"{stats['spread_pct']:.2f}%"
-            cross["reject"] = f"wide spread: {shown} (max {MAX_SPREAD_PCT}%)"
-            return
-    if MIN_BUY_RATIO > 0:
-        try:
-            stats.update(buyer_stats(symbol))
-        except Exception as e:
-            cross["reject"] = f"unverified: trades unavailable ({e})"
-            return
-        cross["reject"] = buyers_reject(stats)
+    try:
+        stats["spread_pct"] = spread_pct(symbol)
+    except Exception as e:
+        cross["reject"] = f"unverified: spread unavailable ({e})"
+        return
+    if stats["spread_pct"] > MAX_SPREAD_PCT:
+        shown = "no bids or no asks" if stats["spread_pct"] == float("inf") else f"{stats['spread_pct']:.2f}%"
+        cross["reject"] = f"wide spread: {shown} (max {MAX_SPREAD_PCT}%)"
 
 
 STATE = {}
@@ -471,30 +531,100 @@ def check_symbol(symbol, handled=frozenset()):
         return symbol, None
 
 
+def load_tags():
+    if not USE_BINANCE_TAGS:
+        return {}
+    cached = None
+    try:
+        if TAGS_CACHE.exists():
+            cached = json.loads(TAGS_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = None
+    if cached and time.time() - cached.get("ts", 0) < TAGS_TTL:
+        return {k: set(v) for k, v in cached["tags"].items()}
+    try:
+        r = session.get(TAGS_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.raise_for_status()
+        tags = {}
+        for product in r.json().get("data") or []:
+            base = str(product.get("b") or "").upper()
+            found = {str(t).lower() for t in (product.get("tags") or [])}
+            if base and found:
+                tags.setdefault(base, set()).update(found)
+        TAGS_CACHE.write_text(json.dumps({"ts": time.time(), "tags": {k: sorted(v) for k, v in tags.items()}}),
+                              encoding="utf-8")
+        if not tags:
+            _warn_once("Binance returned no sector tags; using the built-in meme list and the 1000x/1M rule only")
+        return tags
+    except Exception as e:
+        _warn_once(f"Binance sector tags unavailable ({e}); using the built-in meme list and the 1000x/1M rule only")
+        return {k: set(v) for k, v in cached["tags"].items()} if cached else {}
+
+
+def non_utility_reason(base, tags=()):
+    if base in KEEP_COINS:
+        return None
+    if base in EXCLUDE_COINS:
+        return "in EXCLUDE_COINS"
+    if base in STABLECOINS:
+        return "stablecoin"
+    if MICRO_RE.match(base):
+        return "1000x/1M-scaled micro-priced token (almost always a meme)"
+    if any(t in ("meme", "memes") for t in tags):
+        return "tagged Meme by Binance"
+    if base in MEME_SEED:
+        return "meme coin (built-in list)"
+    return None
+
+
 def get_symbols():
-    info = get("/api/v3/exchangeInfo")
-    tradable = {
-        s["symbol"]
+    try:
+        info = get("/api/v3/exchangeInfo", symbolStatus="TRADING")
+    except Exception:
+        info = get("/api/v3/exchangeInfo")
+    bases = {
+        s["symbol"]: s["baseAsset"].upper()
         for s in info["symbols"]
         if s.get("quoteAsset") == QUOTE
         and s.get("isSpotTradingAllowed", True)
-        and str(s.get("status")).upper() in ("1", "ENABLED")
+        and str(s.get("status")).upper() == "TRADING"
     }
-    volumes = {t["symbol"]: float(t.get("quoteVolume") or 0) for t in get("/api/v3/ticker/24hr")}
-    ranked = sorted((s for s in tradable if volumes.get(s, 0) >= MIN_24H_QUOTE_VOLUME),
-                    key=lambda s: (-volumes[s], s))
+    tickers = get("/api/v3/ticker/24hr")
+    volumes = {t["symbol"]: float(t.get("quoteVolume") or 0) for t in tickers}
+    prices = {t["symbol"]: float(t.get("lastPrice") or 0) for t in tickers}
+    tags = load_tags()
+    excluded, eligible = {}, []
+    for symbol, base in bases.items():
+        if volumes.get(symbol, 0) < MIN_24H_QUOTE_VOLUME:
+            continue
+        price = prices.get(symbol, 0)
+        if (MIN_PRICE and price < MIN_PRICE) or (MAX_PRICE and price > MAX_PRICE):
+            continue
+        why = non_utility_reason(base, tags.get(base, ()))
+        if why:
+            excluded[symbol] = why
+        else:
+            eligible.append(symbol)
+    ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
     RANK.clear()
-    RANK.update({s: (i + 1, volumes[s], len(ranked)) for i, s in enumerate(ranked)})
+    RANK.update({sym: (i + 1, volumes[sym], len(ranked)) for i, sym in enumerate(ranked)})
     symbols = ranked[:TOP_COINS] if TOP_COINS > 0 else ranked
-    smallest = f", smallest ${volumes[symbols[-1]]:,.0f}/day" if symbols else ""
-    print(f"Filter: {len(tradable)} {QUOTE} pairs, {len(ranked)} above the 24h floor "
-          f"(${MIN_24H_QUOTE_VOLUME:,.0f}); scanning the {len(symbols)} with the highest traded value{smallest}")
+    if VERBOSE:
+        for sym, why in sorted(excluded.items()):
+            print(f"[excluded] {sym}: {why}")
+    span = ""
+    if symbols:
+        lo, hi = min(prices[x] for x in symbols), max(prices[x] for x in symbols)
+        span = f"; prices from {lo:.8g} to {hi:,.8g}"
+    print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as not utility "
+          f"(memes, stablecoins), {len(ranked)} utility coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f}); "
+          f"scanning {len(symbols)}{span}")
     return symbols
 
 
 def tradingview_url(symbol):
     layout = f"{TV_LAYOUT_ID}/" if TV_LAYOUT_ID else ""
-    return f"https://www.tradingview.com/chart/{layout}?symbol=MEXC%3A{symbol}&interval=1"
+    return f"https://www.tradingview.com/chart/{layout}?symbol={TV_EXCHANGE}%3A{symbol}&interval=1"
 
 
 def format_alert(symbol, candle_ms, price, stats=None):
@@ -511,13 +641,13 @@ def format_alert(symbol, candle_ms, price, stats=None):
         lines.append(value)
         parts = []
         if stats.get("ratio") is not None:
-            parts.append(f"Buyers: {stats['ratio'] * 100:.0f}% of traded value is buying "
-                         f"({stats['n_buy']} buys / {stats['n_sell']} sells, last {stats['span_min']:.1f} min)")
+            parts.append(f"Buyers: {stats['ratio'] * 100:.0f}% of traded value is aggressive buying "
+                         f"(last {BUYER_WINDOW_MIN} min, {stats['trades']} trades)")
         if stats.get("spread_pct") is not None:
             parts.append(f"spread {stats['spread_pct']:.2f}%")
         if parts:
             lines.append(" | ".join(parts))
-    lines += [tradingview_url(symbol), f"https://www.mexc.com/exchange/{base}_{QUOTE}"]
+    lines += [tradingview_url(symbol), f"https://www.binance.com/en/trade/{base}_{QUOTE}?type=spot"]
     return "\n".join(lines)
 
 
