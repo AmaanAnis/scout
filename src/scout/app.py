@@ -10,7 +10,7 @@ import threading
 import time
 import webbrowser
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -39,11 +39,12 @@ VERBOSE = os.getenv("VERBOSE", "0") == "1"
 REQS_PER_SEC = float(os.getenv("REQS_PER_SEC", "30"))
 WEIGHT_SOFT_LIMIT = int(os.getenv("WEIGHT_SOFT_LIMIT", "4800"))
 REFRESH_SYMBOLS_EVERY = 3600
-SCAN_DELAY = float(os.getenv("SCAN_DELAY", "2"))
-NEAR_PCT = float(os.getenv("NEAR_PCT", "0.05"))
+SCAN_DELAY = float(os.getenv("SCAN_DELAY", "1"))
+NEAR_PCT = float(os.getenv("NEAR_PCT", "0.1"))
 FULL_SCAN = os.getenv("FULL_SCAN", "0") == "1"
 WARM_WORKERS = int(os.getenv("WARM_WORKERS", "12"))
 SCAN_WORKERS = int(os.getenv("SCAN_WORKERS", "16"))
+ALERT_WORKERS = int(os.getenv("ALERT_WORKERS", "8"))
 REWARM_AFTER_S = 3 * 3600
 REWARM_PER_SCAN = 5
 
@@ -60,6 +61,14 @@ TEST_WAIT = float(os.getenv("TEST_WAIT", "30"))
 
 EXCLUDE_COINS = {c.strip().upper() for c in os.getenv("EXCLUDE_COINS", "").split(",") if c.strip()}
 KEEP_COINS = {c.strip().upper() for c in os.getenv("KEEP_COINS", "").split(",") if c.strip()}
+BLOCKLIST_FILE = Path(os.getenv("BLOCKLIST_FILE", Path(__file__).resolve().parent / "blocklist.txt"))
+EXCLUDE_TAGS = {t.strip().lower() for t in
+                os.getenv("EXCLUDE_TAGS", "bstocks,tcommodities,stablecoin,meme,memes").split(",") if t.strip()}
+TAG_REASON = {"bstocks": "tokenized stock/ETF (not crypto)",
+              "tcommodities": "tokenized commodity (not crypto)",
+              "stablecoin": "stablecoin (Binance tag)",
+              "meme": "tagged Meme by Binance", "memes": "tagged Meme by Binance"}
+LEVERAGED_RE = re.compile(r".+\d+[LS]$")
 USE_BINANCE_TAGS = os.getenv("USE_BINANCE_TAGS", "1") == "1"
 TAGS_CACHE = Path(os.getenv("TAGS_CACHE", Path(__file__).resolve().parent / "binance_tags.json"))
 TAGS_TTL = 24 * 3600
@@ -92,6 +101,23 @@ def _warn_once(message):
     if message not in _warned:
         _warned.add(message)
         print(f"[warn] {message}", flush=True)
+
+
+def read_coin_list(path):
+    """Coin list file: one coin per line, '#' starts a comment. Accepts BTC or BTCUSDT."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    out = set()
+    for line in text.splitlines():
+        line = line.split("#")[0].strip().upper()
+        if line:
+            out.add(line[: -len(QUOTE)] if line.endswith(QUOTE) and len(line) > len(QUOTE) else line)
+    return out
+
+
+BLOCKLIST = read_coin_list(BLOCKLIST_FILE)
 
 
 def _notify_send_supports_actions():
@@ -222,7 +248,7 @@ def send_local_server(title, text, url=""):
     headers = {"X-Token": ALERT_TOKEN} if ALERT_TOKEN else {}
     try:
         r = local_session.post(LOCAL_SERVER_URL, json={"title": title, "text": text, "url": url},
-                               headers=headers, timeout=5)
+                               headers=headers, timeout=2)
         r.raise_for_status()
         shown = bool(r.json().get("popup"))
     except Exception as e:
@@ -483,14 +509,17 @@ def advance(state, price, bucket):
 
 
 def snapshot():
-    try:
-        data = get("/api/v3/ticker/price")
-        if isinstance(data, list) and data:
-            return {t["symbol"]: float(t["price"]) for t in data}
-        _warn_once("/ticker/price returned no list; using /ticker/24hr for prices instead")
-    except Exception as e:
-        _warn_once(f"/ticker/price failed ({e}); using /ticker/24hr for prices instead")
-    return {t["symbol"]: float(t["lastPrice"]) for t in get("/api/v3/ticker/24hr") if t.get("lastPrice")}
+    for attempt in range(1, 4):
+        try:
+            data = get("/api/v3/ticker/price")
+            if isinstance(data, list) and data:
+                return {t["symbol"]: float(t["price"]) for t in data}
+            _warn_once("/ticker/price returned no list; using /ticker/24hr for prices instead")
+            return {t["symbol"]: float(t["lastPrice"]) for t in get("/api/v3/ticker/24hr") if t.get("lastPrice")}
+        except Exception:
+            if attempt == 3:
+                raise
+            time.sleep(0.5)
 
 
 def warm_task(symbol):
@@ -533,6 +562,8 @@ def check_symbol(symbol, handled=frozenset()):
 
 def load_tags():
     if not USE_BINANCE_TAGS:
+        _warn_once("USE_BINANCE_TAGS=0: tokenized stocks/ETFs and tagged coins cannot be excluded "
+                   "(they are only filtered through Binance sector tags)")
         return {}
     cached = None
     try:
@@ -566,18 +597,25 @@ def non_utility_reason(base, tags=()):
         return None
     if base in EXCLUDE_COINS:
         return "in EXCLUDE_COINS"
+    if base in BLOCKLIST:
+        return f"in {BLOCKLIST_FILE.name}"
     if base in STABLECOINS:
         return "stablecoin"
+    if LEVERAGED_RE.match(base):
+        return "leveraged token"
     if MICRO_RE.match(base):
         return "1000x/1M-scaled micro-priced token (almost always a meme)"
-    if any(t in ("meme", "memes") for t in tags):
-        return "tagged Meme by Binance"
+    for tag in tags:
+        if tag in EXCLUDE_TAGS:
+            return TAG_REASON.get(tag, f"tagged '{tag}'")
     if base in MEME_SEED:
         return "meme coin (built-in list)"
     return None
 
 
 def get_symbols():
+    global BLOCKLIST
+    BLOCKLIST = read_coin_list(BLOCKLIST_FILE)
     try:
         info = get("/api/v3/exchangeInfo", symbolStatus="TRADING")
     except Exception:
@@ -616,8 +654,9 @@ def get_symbols():
     if symbols:
         lo, hi = min(prices[x] for x in symbols), max(prices[x] for x in symbols)
         span = f"; prices from {fmt_price(lo)} to {fmt_price(hi)}"
-    print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as not utility "
-          f"(memes, stablecoins), {len(ranked)} utility coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f}); "
+    print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
+          f"(stocks/ETFs, tokenized commodities, memes, stablecoins, blocklist), "
+          f"{len(ranked)} coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f}); "
           f"scanning {len(symbols)}{span}")
     return symbols
 
@@ -680,10 +719,20 @@ def scan_minute(symbols, prices, bucket, scan_pool, alert_pool, alerted):
 
     queued = set(candidates)
     candidates += [sym for sym in sorted(RETRY) if sym not in queued]
+    # highest 24h volume first, so the coins that matter are fetched and alerted first
+    candidates.sort(key=lambda sym: RANK.get(sym, (1 << 30, 0, 0))[0])
+
+    seen = frozenset(alerted)
+    futures = {scan_pool.submit(check_symbol, sym, seen): sym for sym in candidates}
 
     found = 0
     skipped = Counter()
-    for symbol, crosses in scan_pool.map(lambda sym: check_symbol(sym, alerted), candidates):
+    for future in as_completed(futures):
+        try:
+            symbol, crosses = future.result()
+        except Exception as e:
+            symbol, crosses = futures[future], None
+            print(f"[warn] {symbol}: {e}")
         pending = crosses is None
         for cross in crosses or []:
             key = (symbol, cross["candle_ms"])
@@ -760,7 +809,7 @@ def main():
     symbols, last_refresh = [], 0
     scan_pool = ThreadPoolExecutor(max_workers=SCAN_WORKERS)
     warm_pool = ThreadPoolExecutor(max_workers=WARM_WORKERS)
-    alert_pool = ThreadPoolExecutor(max_workers=2)
+    alert_pool = ThreadPoolExecutor(max_workers=ALERT_WORKERS)
 
     notify("Scanner started.")
     while True:
