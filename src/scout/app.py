@@ -615,11 +615,16 @@ def get_symbols():
     span = ""
     if symbols:
         lo, hi = min(prices[x] for x in symbols), max(prices[x] for x in symbols)
-        span = f"; prices from {lo:.8g} to {hi:,.8g}"
+        span = f"; prices from {fmt_price(lo)} to {fmt_price(hi)}"
     print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as not utility "
           f"(memes, stablecoins), {len(ranked)} utility coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f}); "
           f"scanning {len(symbols)}{span}")
     return symbols
+
+
+def fmt_price(price):
+    text = f"{price:,.8f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "0") else f"{price:.3g}"
 
 
 def tradingview_url(symbol):
@@ -631,7 +636,7 @@ def format_alert(symbol, candle_ms, price, stats=None):
     base = symbol[: -len(QUOTE)]
     t = time.strftime("%H:%M", time.localtime(candle_ms / 1000))
     lines = [f"🟢 {symbol}: EMA{FAST} crossed ABOVE EMA{SLOW} (bullish)",
-             f"1m candle {t} | close {price}"]
+             f"1m candle {t} | close {fmt_price(price)}"]
     if stats:
         rank = RANK.get(symbol)
         value = (f"last {LIQUIDITY_WINDOW} min: moved {stats['box_pct']:.2f}%, ${stats['traded']:,.0f} traded, "
@@ -712,7 +717,26 @@ def scan_minute(symbols, prices, bucket, scan_pool, alert_pool, alerted):
     return {"ready": ready, "candidates": len(candidates), "found": found, "skipped": skipped}
 
 
+def show_tags():
+    TAGS_CACHE.unlink(missing_ok=True)
+    pick_base()
+    tags = load_tags()
+    counts = Counter(t for found in tags.values() for t in found)
+    print(f"Binance sector tags: {len(tags)} coins have tags")
+    print("most common tags:", ", ".join(f"{t} ({n})" for t, n in counts.most_common(15)) or "none")
+    memes = sorted(b for b, found in tags.items() if "meme" in found or "memes" in found)
+    print(f"coins Binance tags as Meme ({len(memes)}):", ", ".join(memes[:60]) + (" ..." if len(memes) > 60 else ""))
+    for coin in ("DOGE", "PEPE", "SHIB", "LINK", "BTC", "FET"):
+        print(f"  {coin}: {sorted(tags.get(coin, [])) or 'no tags'} -> {non_utility_reason(coin, tags.get(coin, ())) or 'kept as utility'}")
+
+
 def main():
+    if "--tags" in sys.argv:
+        try:
+            return show_tags()
+        except Exception as e:
+            print(f"[error] {e}")
+            return
     server = start_server() if RUN_SERVER else None
     if "--test" in sys.argv:
         notify("🟢 TEST: if you can see this popup, alerts work. Click it: BTCUSDT should open in TradingView.",
@@ -726,6 +750,11 @@ def main():
     elif not RUN_SERVER:
         print("Local alert server not started (RUN_SERVER=0); popups are shown directly")
     print("Popups: " + ("ON" if DESKTOP_NOTIFY else "OFF (DESKTOP_NOTIFY=0)"))
+    try:
+        print(f"Data source: Binance spot ({pick_base()})")
+    except Exception as e:
+        print(f"[error] {e}")
+        return
 
     alerted = set()
     symbols, last_refresh = [], 0
