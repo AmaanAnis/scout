@@ -16,6 +16,7 @@ from pathlib import Path
 import requests
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
+from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field
 
 QUOTE = "USDT"
@@ -23,7 +24,30 @@ TOP_COINS = int(os.getenv("TOP_COINS", "0"))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "50000"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
 MAX_PRICE = float(os.getenv("MAX_PRICE", "0"))
+
+
+def _opt_float(name):
+    raw = os.getenv(name, "").strip()
+    return float(raw) if raw else None
+
+
+# Screening (all off by default). Market cap in USD, changes in percent. Empty/0 = off.
+MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", "0"))      # e.g. 50000000
+MAX_MARKET_CAP = float(os.getenv("MAX_MARKET_CAP", "0"))      # e.g. 5000000000 to skip mega caps
+MIN_CHANGE_24H = _opt_float("MIN_CHANGE_24H")                 # e.g. -5 skips coins down more than 5% on the day
+MAX_CHANGE_24H = _opt_float("MAX_CHANGE_24H")                 # e.g. 40 skips coins already up more than 40%
+MIN_VOL_SURGE = float(os.getenv("MIN_VOL_SURGE", "0"))        # e.g. 1.5 = last hour at least 1.5x its normal volume
+SHOW_MARKET_CAP = os.getenv("SHOW_MARKET_CAP", "0") == "1"    # show cap in alerts even with no cap filter
+SCREEN_MODE = "--screen" in sys.argv
+USE_MCAP = MIN_MARKET_CAP > 0 or MAX_MARKET_CAP > 0 or SHOW_MARKET_CAP or SCREEN_MODE
+MCAP_PAGES = int(os.getenv("MCAP_PAGES", "4"))                # 250 coins per page, ranked by market cap
+MCAP_TTL = 6 * 3600
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
+COINGECKO_KEY = os.getenv("COINGECKO_API_KEY", "").strip()    # optional free demo key, raises rate limits
+MCAP_CACHE = Path(os.getenv("MCAP_CACHE", Path(__file__).resolve().parent / "market_caps.json"))
+SCREEN_TOP = int(os.getenv("SCREEN_TOP", "30"))
 FAST, SLOW = 20, 200
+K_FAST, K_SLOW = 2 / (FAST + 1), 2 / (SLOW + 1)
 INTERVAL = "1m"
 CANDLES = 1000
 LOOKBACK = 3
@@ -89,9 +113,16 @@ BINANCE_BASES = ([os.environ["BINANCE_BASE"].rstrip("/")] if os.getenv("BINANCE_
 
 BASE = BINANCE_BASES[0]
 session = requests.Session()
+# requests keeps only 10 connections per host by default. With SCAN_WORKERS + WARM_WORKERS threads in flight the
+# rest were opened, used once and thrown away, so most calls paid a fresh TCP + TLS handshake.
+_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=SCAN_WORKERS + WARM_WORKERS + 4)
+session.mount("https://", _adapter)
+session.mount("http://", _adapter)
 local_session = requests.Session()
 local_session.trust_env = False
 RANK = {}
+CHANGE = {}   # symbol -> 24h price change % (refreshed with the symbol list)
+MCAP = {}     # symbol -> market cap in USD (only when USE_MCAP and CoinGecko knows the coin)
 
 _actions_ok = None
 _warned = set()
@@ -407,27 +438,83 @@ def liquidity_reject(stats):
     return None
 
 
-def find_crosses(rows, now_ms=None):
+def volume_surge(rows, i, traded):
+    """Volume of the last LIQUIDITY_WINDOW minutes divided by the average same-length window before it.
+
+    Uses only candles already fetched (about 16 h), so it costs no extra request. None if there is no baseline.
+    """
+    total = 0.0
+    for r in rows[: i + 1]:
+        total += float(r[7]) if len(r) > 7 else float(r[5]) * float(r[4])
+    before_minutes = i + 1 - LIQUIDITY_WINDOW
+    baseline = (total - traded) / before_minutes * LIQUIDITY_WINDOW if before_minutes > 0 else 0.0
+    return traded / baseline if baseline > 0 else None
+
+
+def surge_reject(stats):
+    if MIN_VOL_SURGE <= 0:
+        return None
+    surge = stats.get("surge")
+    if surge is None:
+        return "low surge: no earlier volume to compare against"
+    if surge < MIN_VOL_SURGE:
+        return (f"low surge: last {LIQUIDITY_WINDOW} min volume is only {surge:.1f}x its normal level "
+                f"(min {MIN_VOL_SURGE:g}x)")
+    return None
+
+
+def closed_rows(rows, now_ms=None):
+    """Drop the still-forming candle. Returns None when there is too little history to trust the EMAs."""
     now_ms = now_ms or clock_ms()
     if rows and int(rows[-1][0]) + 60_000 > now_ms:
         rows = rows[:-1]
-    if len(rows) < SLOW + LOOKBACK + 1:
-        return []
+    return rows if len(rows) >= SLOW + LOOKBACK + 1 else None
 
-    closes = [float(r[4]) for r in rows]
-    fast, slow = ema(closes, FAST), ema(closes, SLOW)
-    diff = [f - s if f is not None and s is not None else None for f, s in zip(fast, slow)]
 
+def ema_tail(closes):
+    """EMA(FAST) and EMA(SLOW) in one pass, with the same arithmetic as ema() so results are identical.
+
+    Returns (fast_last, slow_last, diffs) where diffs holds fast - slow for just the last LOOKBACK + 1 candles
+    (diffs[0] belongs to candle len(closes) - LOOKBACK - 1). Needs len(closes) >= SLOW + LOOKBACK + 1.
+    """
+    first = len(closes) - LOOKBACK - 1
+    fast = sum(closes[:FAST]) / FAST
+    slow = sum(closes[:SLOW]) / SLOW
+    for v in closes[FAST:SLOW]:
+        fast = v * K_FAST + fast * (1 - K_FAST)
+    for v in closes[SLOW:first]:
+        fast = v * K_FAST + fast * (1 - K_FAST)
+        slow = v * K_SLOW + slow * (1 - K_SLOW)
+    diffs = []
+    for v in closes[first:]:
+        fast = v * K_FAST + fast * (1 - K_FAST)
+        slow = v * K_SLOW + slow * (1 - K_SLOW)
+        diffs.append(fast - slow)
+    return fast, slow, diffs
+
+
+def _crosses(rows, closes, diffs):
+    n = len(rows)
+    base = n - LOOKBACK - 1
     found = []
-    for i in range(len(rows) - LOOKBACK, len(rows)):
-        prev, curr = diff[i - 1], diff[i]
-        if prev is None or curr is None or not (prev <= 0 < curr):
+    for i in range(n - LOOKBACK, n):
+        if not (diffs[i - 1 - base] <= 0 < diffs[i - base]):
             continue
         stats = liquidity_stats(rows, i)
         stats.update(taker_stats(rows, i))
+        stats["surge"] = volume_surge(rows, i, stats["traded"])
         found.append({"candle_ms": int(rows[i][0]), "price": closes[i],
-                      "reject": liquidity_reject(stats) or buyers_reject(stats), "stats": stats})
+                      "reject": liquidity_reject(stats) or buyers_reject(stats) or surge_reject(stats),
+                      "stats": stats})
     return found
+
+
+def find_crosses(rows, now_ms=None):
+    rows = closed_rows(rows, now_ms)
+    if rows is None:
+        return []
+    closes = [float(r[4]) for r in rows]
+    return _crosses(rows, closes, ema_tail(closes)[2])
 
 
 def spread_pct(symbol):
@@ -465,10 +552,26 @@ def buyers_reject(stats):
     return None
 
 
+def change_24h(symbol):
+    return float(get("/api/v3/ticker/24hr", symbol=symbol)["priceChangePercent"])
+
+
 def verify(symbol, cross):
+    stats = cross["stats"]
+    if MIN_CHANGE_24H is not None or MAX_CHANGE_24H is not None:
+        try:
+            stats["change_24h"] = change = change_24h(symbol)
+        except Exception as e:
+            cross["reject"] = f"unverified: 24h change unavailable ({e})"
+            return
+        if MIN_CHANGE_24H is not None and change < MIN_CHANGE_24H:
+            cross["reject"] = f"weak day: 24h change {change:+.1f}% (min {MIN_CHANGE_24H:+g}%)"
+            return
+        if MAX_CHANGE_24H is not None and change > MAX_CHANGE_24H:
+            cross["reject"] = f"overextended: 24h change {change:+.1f}% (max {MAX_CHANGE_24H:+g}%)"
+            return
     if MAX_SPREAD_PCT <= 0:
         return
-    stats = cross["stats"]
     try:
         stats["spread_pct"] = spread_pct(symbol)
     except Exception as e:
@@ -484,20 +587,21 @@ WARMING = set()
 NO_HISTORY = {}
 RETRY = {}
 MAX_RETRIES = 3
-K_FAST, K_SLOW = 2 / (FAST + 1), 2 / (SLOW + 1)
+
+
+def _sync(symbol, rows, now_ms=None):
+    """Rebuild STATE[symbol] from fresh candles. Returns (rows, closes, diffs) for cross detection, or None."""
+    rows = closed_rows(rows, now_ms)
+    if rows is None:
+        return None
+    closes = [float(r[4]) for r in rows]
+    fast, slow, diffs = ema_tail(closes)
+    STATE[symbol] = {"fast": fast, "slow": slow, "next": int(rows[-1][0]) // 60_000 + 1, "synced": time.time()}
+    return rows, closes, diffs
 
 
 def resync(symbol, rows, now_ms=None):
-    now_ms = now_ms or clock_ms()
-    if rows and int(rows[-1][0]) + 60_000 > now_ms:
-        rows = rows[:-1]
-    if len(rows) < SLOW + LOOKBACK + 1:
-        return False
-    closes = [float(r[4]) for r in rows]
-    fast, slow = ema(closes, FAST), ema(closes, SLOW)
-    STATE[symbol] = {"fast": fast[-1], "slow": slow[-1], "next": int(rows[-1][0]) // 60_000 + 1,
-                     "synced": time.time()}
-    return True
+    return _sync(symbol, rows, now_ms) is not None
 
 
 def advance(state, price, bucket):
@@ -549,8 +653,9 @@ def warm_up(symbols, pool):
 def check_symbol(symbol, handled=frozenset()):
     try:
         rows = get("/api/v3/klines", symbol=symbol, interval=INTERVAL, limit=CANDLES)
-        resync(symbol, rows)
-        crosses = [c for c in find_crosses(rows) if (symbol, c["candle_ms"]) not in handled]
+        synced = _sync(symbol, rows)
+        found = _crosses(*synced) if synced else []
+        crosses = [c for c in found if (symbol, c["candle_ms"]) not in handled]
         for c in crosses:
             if c["reject"] is None:
                 verify(symbol, c)
@@ -592,6 +697,58 @@ def load_tags():
         return {k: set(v) for k, v in cached["tags"].items()} if cached else {}
 
 
+def load_market_caps():
+    """Ticker -> market cap in USD for CoinGecko's top MCAP_PAGES * 250 coins, cached for MCAP_TTL.
+
+    Returns {} if unavailable. Tickers are not unique across coins, so the largest cap wins for a shared ticker.
+    """
+    cached = None
+    try:
+        if MCAP_CACHE.exists():
+            cached = json.loads(MCAP_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = None
+    if cached and time.time() - cached.get("ts", 0) < MCAP_TTL:
+        return cached["caps"]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if COINGECKO_KEY:
+        headers["x-cg-demo-api-key"] = COINGECKO_KEY
+    try:
+        caps = {}
+        for page in range(1, MCAP_PAGES + 1):
+            r = session.get(COINGECKO_URL, headers=headers, timeout=15,
+                            params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 250, "page": page})
+            r.raise_for_status()
+            coins = r.json()
+            for coin in coins:
+                ticker = str(coin.get("symbol") or "").upper()
+                cap = float(coin.get("market_cap") or 0)
+                if ticker and cap > caps.get(ticker, 0.0):
+                    caps[ticker] = cap
+            if len(coins) < 250:
+                break
+            time.sleep(2)  # the keyless tier is rate limited by IP
+        MCAP_CACHE.write_text(json.dumps({"ts": time.time(), "caps": caps}), encoding="utf-8")
+        return caps
+    except Exception as e:
+        _warn_once(f"market caps unavailable ({e}); MIN/MAX_MARKET_CAP are ignored until CoinGecko responds"
+                   + (" (using an older cached copy)" if cached else ""))
+        return cached["caps"] if cached else {}
+
+
+def cap_reason(cap, caps_loaded):
+    """Why a coin fails the market cap filter, or None. Coins missing from CoinGecko's list count as small."""
+    if not (MIN_MARKET_CAP or MAX_MARKET_CAP) or not caps_loaded:
+        return None
+    if cap is None:
+        return "market cap unknown (outside CoinGecko's top coins)" if MIN_MARKET_CAP else None
+    if MIN_MARKET_CAP and cap < MIN_MARKET_CAP:
+        return f"market cap ${cap:,.0f} below ${MIN_MARKET_CAP:,.0f}"
+    if MAX_MARKET_CAP and cap > MAX_MARKET_CAP:
+        return f"market cap ${cap:,.0f} above ${MAX_MARKET_CAP:,.0f}"
+    return None
+
+
 def non_utility_reason(base, tags=()):
     if base in KEEP_COINS:
         return None
@@ -630,8 +787,12 @@ def get_symbols():
     tickers = get("/api/v3/ticker/24hr")
     volumes = {t["symbol"]: float(t.get("quoteVolume") or 0) for t in tickers}
     prices = {t["symbol"]: float(t.get("lastPrice") or 0) for t in tickers}
+    changes = {t["symbol"]: float(t.get("priceChangePercent") or 0) for t in tickers}
     tags = load_tags()
-    excluded, eligible = {}, []
+    caps = load_market_caps() if USE_MCAP else {}
+    if (MIN_MARKET_CAP or MAX_MARKET_CAP) and USE_MCAP and not caps:
+        _warn_once("no market cap data loaded, so the market cap filter is not being applied")
+    excluded, screened, eligible = {}, {}, []
     for symbol, base in bases.items():
         if volumes.get(symbol, 0) < MIN_24H_QUOTE_VOLUME:
             continue
@@ -641,14 +802,22 @@ def get_symbols():
         why = non_utility_reason(base, tags.get(base, ()))
         if why:
             excluded[symbol] = why
+            continue
+        why = cap_reason(caps.get(base), bool(caps))
+        if why:
+            screened[symbol] = why
         else:
             eligible.append(symbol)
     ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
     RANK.clear()
     RANK.update({sym: (i + 1, volumes[sym], len(ranked)) for i, sym in enumerate(ranked)})
+    CHANGE.clear()
+    CHANGE.update({sym: changes.get(sym, 0.0) for sym in ranked})
+    MCAP.clear()
+    MCAP.update({sym: caps[bases[sym]] for sym in ranked if bases[sym] in caps})
     symbols = ranked[:TOP_COINS] if TOP_COINS > 0 else ranked
     if VERBOSE:
-        for sym, why in sorted(excluded.items()):
+        for sym, why in sorted({**excluded, **screened}.items()):
             print(f"[excluded] {sym}: {why}")
     span = ""
     if symbols:
@@ -656,14 +825,22 @@ def get_symbols():
         span = f"; prices from {fmt_price(lo)} to {fmt_price(hi)}"
     print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
           f"(stocks/ETFs, tokenized commodities, memes, stablecoins, blocklist), "
-          f"{len(ranked)} coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f}); "
-          f"scanning {len(symbols)}{span}")
+          f"{len(ranked) + len(screened)} coins above the 24h floor (${MIN_24H_QUOTE_VOLUME:,.0f})"
+          + (f", {len(screened)} removed by the market cap filter" if screened else "")
+          + f"; scanning {len(symbols)}{span}")
     return symbols
 
 
 def fmt_price(price):
     text = f"{price:,.8f}".rstrip("0").rstrip(".")
     return text if text not in ("", "0") else f"{price:.3g}"
+
+
+def fmt_big(value):
+    for limit, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if value >= limit:
+            return f"${value / limit:.2f}{suffix}"
+    return f"${value:,.0f}"
 
 
 def tradingview_url(symbol):
@@ -691,6 +868,16 @@ def format_alert(symbol, candle_ms, price, stats=None):
             parts.append(f"spread {stats['spread_pct']:.2f}%")
         if parts:
             lines.append(" | ".join(parts))
+        screen = []
+        if MCAP.get(symbol):
+            screen.append(f"mcap {fmt_big(MCAP[symbol])}")
+        change = stats.get("change_24h", CHANGE.get(symbol))
+        if change is not None:
+            screen.append(f"24h {change:+.1f}%")
+        if stats.get("surge") is not None:
+            screen.append(f"volume {stats['surge']:.1f}x normal (last {LIQUIDITY_WINDOW} min)")
+        if screen:
+            lines.append(" | ".join(screen))
     lines += [tradingview_url(symbol), f"https://www.binance.com/en/trade/{base}_{QUOTE}?type=spot"]
     return "\n".join(lines)
 
@@ -779,7 +966,76 @@ def show_tags():
         print(f"  {coin}: {sorted(tags.get(coin, [])) or 'no tags'} -> {non_utility_reason(coin, tags.get(coin, ())) or 'kept as utility'}")
 
 
+def show_screen():
+    """Print the top SCREEN_TOP coins (by 24h volume, after all coin filters) ranked on four measures."""
+    pick_base()
+    top = get_symbols()[:SCREEN_TOP]
+    if not top:
+        print("No coins passed the filters.")
+        return
+
+    def surge_for(symbol):
+        try:
+            rows = closed_rows(get("/api/v3/klines", symbol=symbol, interval=INTERVAL, limit=CANDLES))
+            if rows is None:
+                return symbol, None
+            i = len(rows) - 1
+            return symbol, volume_surge(rows, i, liquidity_stats(rows, i)["traded"])
+        except Exception:
+            return symbol, None
+
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        surge = {s: v for s, v in pool.map(surge_for, top) if v is not None}
+
+    def passes(s):
+        change = CHANGE.get(s, 0.0)
+        if MIN_CHANGE_24H is not None and change < MIN_CHANGE_24H:
+            return False
+        if MAX_CHANGE_24H is not None and change > MAX_CHANGE_24H:
+            return False
+        return not (MIN_VOL_SURGE > 0 and surge.get(s, 0.0) < MIN_VOL_SURGE)
+
+    checked = len(top)
+    top = [s for s in top if passes(s)]
+    if not top:
+        print(f"None of the top {checked} coins by volume pass your change / volume surge filters.")
+        return
+
+    measures = {
+        "volume": {s: RANK[s][1] for s in top},
+        "change": {s: CHANGE[s] for s in top if s in CHANGE},
+        "cap": {s: MCAP[s] for s in top if s in MCAP},
+        "surge": surge,
+    }
+
+    def percentiles(values):
+        order = sorted(values, key=values.get)
+        last = max(len(order) - 1, 1)
+        return {s: k / last for k, s in enumerate(order)}
+
+    pct = {name: percentiles(v) for name, v in measures.items() if len(v) > 1}
+    score = {s: sum(p.get(s, 0.5) for p in pct.values()) / max(len(pct), 1) for s in top}
+    ranked = sorted(top, key=lambda s: (-score[s], s))
+
+    print(f"\n{len(top)} of the top {checked} coins by 24h volume pass your filters, ranked by average percentile "
+          f"of {', '.join(pct) or 'volume'} (higher = stronger on all of them)\n")
+    print(f"{'#':>3}  {'coin':<10} {'score':>5}  {'24h volume':>10}  {'24h chg':>8}  {'mcap':>9}  {'vol surge':>9}")
+    for n, s in enumerate(ranked, 1):
+        cap = fmt_big(MCAP[s]) if s in MCAP else "-"
+        sg = f"{surge[s]:.1f}x" if s in surge else "-"
+        print(f"{n:>3}  {s[:-len(QUOTE)]:<10} {score[s] * 100:>5.0f}  {fmt_big(RANK[s][1]):>10}  "
+              f"{CHANGE.get(s, 0.0):>+7.1f}%  {cap:>9}  {sg:>9}")
+    print(f"\nvol surge = last {LIQUIDITY_WINDOW} min volume vs the average {LIQUIDITY_WINDOW} min window "
+          f"in the previous ~{CANDLES // 60} h. This is a ranking aid, not a buy signal.")
+
+
 def main():
+    if "--screen" in sys.argv:
+        try:
+            return show_screen()
+        except Exception as e:
+            print(f"[error] {e}")
+            return
     if "--tags" in sys.argv:
         try:
             return show_tags()
