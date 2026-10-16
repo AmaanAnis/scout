@@ -1,3 +1,9 @@
+"""Top-coins scanner: alerts when EMA20 crosses above EMA200 on the 1m chart, for top coins only.
+
+Same engine as app.py (which scans every coin), but this file only watches a fixed list of top coins
+(BTC, ETH, XRP, SOL, ...). Edit the list with MAJORS=BTC,ETH,XRP,... (see the MAJORS setting below).
+All the other settings (MIN_CHANGE_24H, MIN_VOL_SURGE, MIN_MARKET_CAP, ...) work the same as in app.py.
+"""
 import hmac
 import json
 import os
@@ -20,11 +26,12 @@ from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field
 
 QUOTE = "USDT"
-# Majors-only mode: scan and alert on just these coins (python app.py --majors, or MAJORS_ONLY=1).
-# Override the list with MAJORS=BTC,ETH,SOL,XRP. Bypasses the meme/sector filters, since DOGE etc. are majors too.
-MAJORS_MODE = "--majors" in sys.argv or os.getenv("MAJORS_ONLY", "0") == "1"
+# This file always runs in top-coins mode: only the coins below are scanned and alerted on.
+# Override with MAJORS=BTC,ETH,SOL,XRP. Meme/sector filters are bypassed for listed coins (DOGE is a top coin too).
+# Coins that are not a Binance spot USDT pair are skipped with a one-time warning.
+MAJORS_MODE = True
 MAJORS = [c.strip().upper() for c in os.getenv(
-    "MAJORS", "BTC,ETH,XRP,BNB,SOL,DOGE,TRX,ADA,LINK,AVAX,XLM,LTC,BCH,HBAR,DOT").split(",") if c.strip()]
+    "MAJORS", "BTC,ETH,XRP,BNB,SOL,TRX,DOGE,ADA,HYPE,LINK,SUI,AVAX,TON,XLM,BCH,LTC,HBAR").split(",") if c.strip()]
 TOP_COINS = int(os.getenv("TOP_COINS", "0"))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "50000"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
@@ -39,7 +46,12 @@ def _opt_float(name):
 # Screening (all off by default). Market cap in USD, changes in percent. Empty/0 = off.
 MIN_MARKET_CAP = float(os.getenv("MIN_MARKET_CAP", "0"))      # e.g. 50000000
 MAX_MARKET_CAP = float(os.getenv("MAX_MARKET_CAP", "0"))      # e.g. 5000000000 to skip mega caps
+# Gainers-only mode (python app.py --gainers, or GAINERS_ONLY=1): alert only on coins up over the last 24h.
+# Raise the bar with MIN_CHANGE_24H, e.g. MIN_CHANGE_24H=3 for coins up at least 3%.
+GAINERS_MODE = "--gainers" in sys.argv or os.getenv("GAINERS_ONLY", "0") == "1"
 MIN_CHANGE_24H = _opt_float("MIN_CHANGE_24H")                 # e.g. -5 skips coins down more than 5% on the day
+if GAINERS_MODE and MIN_CHANGE_24H is None:
+    MIN_CHANGE_24H = 0.0
 MAX_CHANGE_24H = _opt_float("MAX_CHANGE_24H")                 # e.g. 40 skips coins already up more than 40%
 MIN_VOL_SURGE = float(os.getenv("MIN_VOL_SURGE", "0"))        # e.g. 1.5 = last hour at least 1.5x its normal volume
 SHOW_MARKET_CAP = os.getenv("SHOW_MARKET_CAP", "0") == "1"    # show cap in alerts even with no cap filter
@@ -297,7 +309,7 @@ def send_local_server(title, text, url=""):
     return shown
 
 
-def notify(text, title="Binance bullish cross", url=""):
+def notify(text, title="Top coins bullish cross", url=""):
     print(text, flush=True)
     if USE_SERVER and send_local_server(title, text, url):
         return
@@ -569,8 +581,11 @@ def verify(symbol, cross):
         except Exception as e:
             cross["reject"] = f"unverified: 24h change unavailable ({e})"
             return
-        if MIN_CHANGE_24H is not None and change < MIN_CHANGE_24H:
-            cross["reject"] = f"weak day: 24h change {change:+.1f}% (min {MIN_CHANGE_24H:+g}%)"
+        if MIN_CHANGE_24H is not None and (change < MIN_CHANGE_24H or (GAINERS_MODE and change <= 0)):
+            cross["reject"] = (f"not a gainer: 24h change {change:+.1f}% (needs "
+                               f"{'above 0%' if MIN_CHANGE_24H <= 0 else f'at least {MIN_CHANGE_24H:g}%'})"
+                               if GAINERS_MODE else
+                               f"weak day: 24h change {change:+.1f}% (min {MIN_CHANGE_24H:+g}%)")
             return
         if MAX_CHANGE_24H is not None and change > MAX_CHANGE_24H:
             cross["reject"] = f"overextended: 24h change {change:+.1f}% (max {MAX_CHANGE_24H:+g}%)"
@@ -1007,7 +1022,7 @@ def show_screen():
 
     def passes(s):
         change = CHANGE.get(s, 0.0)
-        if MIN_CHANGE_24H is not None and change < MIN_CHANGE_24H:
+        if MIN_CHANGE_24H is not None and (change < MIN_CHANGE_24H or (GAINERS_MODE and change <= 0)):
             return False
         if MAX_CHANGE_24H is not None and change > MAX_CHANGE_24H:
             return False
@@ -1085,7 +1100,7 @@ def main():
     warm_pool = ThreadPoolExecutor(max_workers=WARM_WORKERS)
     alert_pool = ThreadPoolExecutor(max_workers=ALERT_WORKERS)
 
-    notify("Scanner started.")
+    notify("Top coins scanner started.")
     while True:
         if not symbols or time.time() - last_refresh > REFRESH_SYMBOLS_EVERY:
             try:
