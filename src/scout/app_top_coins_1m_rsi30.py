@@ -5,8 +5,11 @@ when RSI was above the configured level on the previous closed candle and is at/
 on the current closed candle. It will not repeat every minute while RSI remains oversold;
 a new alert requires RSI to recover above the level and cross down again. This is a signal
 scanner, not an auto-trader. Test after fees and slippage before using for live trading.
-Scans the expanded curated list of up to 56 coins. Set MAJORS=BTC,ETH,... to replace it,
-or TOP_COINS=30 to scan only the highest-24h-volume coins within that list.
+By default, dynamically scans the most active Binance spot USDT pairs: coins must clear
+both a 24-hour notional-volume floor and a minimum absolute 24-hour move, then are ranked
+by dollar-volume × move. The universe refreshes every five minutes, so new fast movers are
+picked up without a restart. Set DYNAMIC_UNIVERSE=0 and MAJORS=BTC,ETH,... to use a fixed
+curated list instead.
 """
 import hmac
 import json
@@ -30,11 +33,13 @@ from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field
 
 QUOTE = "USDT"
-# This file stays in curated top-coins mode: only coins in MAJORS are scanned.
-# Override MAJORS with a comma-separated list. Listed coins bypass the general meme/sector exclusions.
-# If TOP_COINS > 0, it limits the watchlist to that many highest-24h-volume coins from MAJORS.
+# Dynamic mode is the default. It selects high-dollar-volume coins that are moving materially,
+# rather than retaining yesterday's static watchlist. Set DYNAMIC_UNIVERSE=0 for a fixed MAJORS list.
+# In fixed mode, MAJORS can be overridden with a comma-separated list and listed coins bypass
+# the general meme/sector exclusions.
 # Coins without a Binance spot USDT pair are skipped with a one-time warning.
-MAJORS_MODE = True
+DYNAMIC_UNIVERSE = os.getenv("DYNAMIC_UNIVERSE", "1") == "1"
+MAJORS_MODE = not DYNAMIC_UNIVERSE
 DEFAULT_MAJORS = (
     "BTC,ETH,XRP,BNB,SOL,TRX,DOGE,ADA,HYPE,LINK,SUI,AVAX,TON,XLM,BCH,LTC,HBAR,"
     "DOT,UNI,NEAR,ETC,AAVE,FIL,ICP,ATOM,ARB,OP,APT,INJ,SEI,RENDER,FET,TAO,"
@@ -42,8 +47,16 @@ DEFAULT_MAJORS = (
     "JUP,TIA,ONDO,MKR,SAND,MANA"
 )
 MAJORS = [c.strip().upper() for c in os.getenv("MAJORS", DEFAULT_MAJORS).split(",") if c.strip()]
+# TOP_COINS remains supported; MOVER_COUNT is clearer for the dynamic universe.
 TOP_COINS = int(os.getenv("TOP_COINS", "0"))
-MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "50000"))
+MOVER_COUNT = max(1, int(os.getenv("MOVER_COUNT", str(TOP_COINS or 40))))
+MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "1000000"))
+MIN_ABS_CHANGE_24H = float(os.getenv("MIN_ABS_CHANGE_24H", "2"))
+# "both" finds fast gainers and losers; use "up" when oversold pullbacks should only be
+# considered within coins that are still green on the day, or "down" for selloff monitoring.
+MOVER_DIRECTION = os.getenv("MOVER_DIRECTION", "both").strip().lower()
+if MOVER_DIRECTION not in {"both", "up", "down"}:
+    raise ValueError("MOVER_DIRECTION must be one of: both, up, down")
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
 MAX_PRICE = float(os.getenv("MAX_PRICE", "0"))
 
@@ -96,7 +109,7 @@ MIN_TAPE_TRADES = int(os.getenv("MIN_TAPE_TRADES", "30"))
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 REQS_PER_SEC = float(os.getenv("REQS_PER_SEC", "30"))
 WEIGHT_SOFT_LIMIT = int(os.getenv("WEIGHT_SOFT_LIMIT", "4800"))
-REFRESH_SYMBOLS_EVERY = 3600
+REFRESH_SYMBOLS_EVERY = int(os.getenv("REFRESH_SYMBOLS_EVERY", "300" if DYNAMIC_UNIVERSE else "3600"))
 SCAN_DELAY = float(os.getenv("SCAN_DELAY", "1"))
 NEAR_PCT = float(os.getenv("NEAR_PCT", "0.1"))
 # Inspect closed 1m candles directly to avoid missing confirmed crosses.
@@ -121,8 +134,10 @@ TEST_WAIT = float(os.getenv("TEST_WAIT", "30"))
 EXCLUDE_COINS = {c.strip().upper() for c in os.getenv("EXCLUDE_COINS", "").split(",") if c.strip()}
 KEEP_COINS = {c.strip().upper() for c in os.getenv("KEEP_COINS", "").split(",") if c.strip()}
 BLOCKLIST_FILE = Path(os.getenv("BLOCKLIST_FILE", Path(__file__).resolve().parent / "blocklist.txt"))
+EXCLUDE_MEMES = os.getenv("EXCLUDE_MEMES", "0" if DYNAMIC_UNIVERSE else "1") == "1"
 EXCLUDE_TAGS = {t.strip().lower() for t in
-                os.getenv("EXCLUDE_TAGS", "bstocks,tcommodities,stablecoin,meme,memes").split(",") if t.strip()}
+                os.getenv("EXCLUDE_TAGS", "bstocks,tcommodities,stablecoin" +
+                          (",meme,memes" if EXCLUDE_MEMES else "")).split(",") if t.strip()}
 TAG_REASON = {"bstocks": "tokenized stock/ETF (not crypto)",
               "tcommodities": "tokenized commodity (not crypto)",
               "stablecoin": "stablecoin (Binance tag)",
@@ -158,6 +173,7 @@ local_session.trust_env = False
 RANK = {}
 CHANGE = {}   # symbol -> 24h price change % (refreshed with the symbol list)
 MCAP = {}     # symbol -> market cap in USD (only when USE_MCAP and CoinGecko knows the coin)
+MOVER = {}    # symbol -> (absolute 24h move %, 24h dollar-volume × move score)
 
 _actions_ok = None
 _warned = set()
@@ -867,7 +883,7 @@ def non_utility_reason(base, tags=()):
     for tag in tags:
         if tag in EXCLUDE_TAGS:
             return TAG_REASON.get(tag, f"tagged '{tag}'")
-    if base in MEME_SEED:
+    if EXCLUDE_MEMES and base in MEME_SEED:
         return "meme coin (built-in list)"
     return None
 
@@ -919,14 +935,37 @@ def get_symbols():
             screened[symbol] = why
         else:
             eligible.append(symbol)
-    ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
+    if DYNAMIC_UNIVERSE:
+        def is_mover(symbol):
+            change = changes.get(symbol, 0.0)
+            if abs(change) < MIN_ABS_CHANGE_24H:
+                return False
+            if MOVER_DIRECTION == "up":
+                return change >= MIN_ABS_CHANGE_24H
+            if MOVER_DIRECTION == "down":
+                return change <= -MIN_ABS_CHANGE_24H
+            return True
+
+        eligible = [symbol for symbol in eligible if is_mover(symbol)]
+        # Rank by the amount of dollar volume participating in the move. This avoids
+        # selecting a thin token solely for a large percentage print while still
+        # prioritising a real, high-volume move over a merely liquid flat market.
+        ranked = sorted(
+            eligible,
+            key=lambda sym: (-(volumes[sym] * abs(changes.get(sym, 0.0))), -volumes[sym], sym),
+        )
+    else:
+        ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
     RANK.clear()
     RANK.update({sym: (i + 1, volumes[sym], len(ranked)) for i, sym in enumerate(ranked)})
     CHANGE.clear()
     CHANGE.update({sym: changes.get(sym, 0.0) for sym in ranked})
     MCAP.clear()
     MCAP.update({sym: caps[bases[sym]] for sym in ranked if bases[sym] in caps})
-    symbols = ranked[:TOP_COINS] if TOP_COINS > 0 else ranked
+    MOVER.clear()
+    MOVER.update({sym: (abs(changes.get(sym, 0.0)), volumes[sym] * abs(changes.get(sym, 0.0)) / 100)
+                  for sym in ranked})
+    symbols = ranked[:MOVER_COUNT] if DYNAMIC_UNIVERSE else (ranked[:TOP_COINS] if TOP_COINS > 0 else ranked)
     if VERBOSE:
         for sym, why in sorted({**excluded, **screened}.items()):
             print(f"[excluded] {sym}: {why}")
@@ -937,6 +976,13 @@ def get_symbols():
     if MAJORS_MODE:
         print(f"Majors only: scanning {len(symbols)} of {len(MAJORS)} listed coins: "
               f"{', '.join(x[:-len(QUOTE)] for x in symbols)} (sideways filter MIN_BOX_PCT={MIN_BOX_PCT:g}%)")
+        return symbols
+    if DYNAMIC_UNIVERSE:
+        direction = {"both": "up or down", "up": "up", "down": "down"}[MOVER_DIRECTION]
+        print(f"Dynamic movers: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
+              f"(stocks/ETFs, tokenized commodities, stablecoins, blocklist), "
+              f"{len(ranked)} liquid coins moving at least {MIN_ABS_CHANGE_24H:g}% {direction} in 24h "
+              f"(volume floor ${MIN_24H_QUOTE_VOLUME:,.0f}); scanning top {len(symbols)} by volume × move" + span)
         return symbols
     print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
           f"(stocks/ETFs, tokenized commodities, memes, stablecoins, blocklist), "
@@ -979,6 +1025,9 @@ def format_alert(symbol, candle_ms, price, stats=None, signal="rsi_touch"):
     change = stats.get("change_24h", CHANGE.get(symbol)) if stats else CHANGE.get(symbol)
     if change is not None:
         lines.append(f"24h price change: {change:+.1f}%")
+    mover = MOVER.get(symbol)
+    if mover:
+        lines.append(f"Mover activity score: ${mover[1]:,.0f} (24h volume × absolute move)")
     lines.append("Oversold-condition alert only; this is not a confirmed buy signal.")
     lines += [tradingview_url(symbol), f"https://www.binance.com/en/trade/{base}_{QUOTE}?type=spot"]
     return "\n".join(lines)
@@ -1155,7 +1204,8 @@ def main():
     scan_pool = ThreadPoolExecutor(max_workers=SCAN_WORKERS)
     alert_pool = ThreadPoolExecutor(max_workers=ALERT_WORKERS)
 
-    notify(f"Top coins 1m RSI({RSI_PERIOD}) {RSI_LEVEL:g} touch scanner started.")
+    scope = "dynamic high-volume movers" if DYNAMIC_UNIVERSE else "curated top coins"
+    notify(f"{scope.title()} 1m RSI({RSI_PERIOD}) {RSI_LEVEL:g} touch scanner started.")
     while True:
         if not symbols or time.time() - last_refresh > REFRESH_SYMBOLS_EVERY:
             try:
