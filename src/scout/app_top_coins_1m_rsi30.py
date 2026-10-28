@@ -52,11 +52,21 @@ TOP_COINS = int(os.getenv("TOP_COINS", "0"))
 MOVER_COUNT = max(1, int(os.getenv("MOVER_COUNT", str(TOP_COINS or 40))))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "1000000"))
 MIN_ABS_CHANGE_24H = float(os.getenv("MIN_ABS_CHANGE_24H", "2"))
-# "both" finds fast gainers and losers; use "up" when oversold pullbacks should only be
-# considered within coins that are still green on the day, or "down" for selloff monitoring.
-MOVER_DIRECTION = os.getenv("MOVER_DIRECTION", "both").strip().lower()
+# RSI pullbacks are generally more useful inside an active daily up-move. Use "both" to
+# monitor every fast mover, or "down" specifically for selloff monitoring.
+MOVER_DIRECTION = os.getenv("MOVER_DIRECTION", "up").strip().lower()
 if MOVER_DIRECTION not in {"both", "up", "down"}:
     raise ValueError("MOVER_DIRECTION must be one of: both, up, down")
+# A rolling 24h ticker can remain large after a one-off pump. Before choosing the
+# watchlist, compare the last six completed hourly candles with the preceding 18.
+# This keeps coins with sustained trader attention and rejects volume that has faded.
+ATTENTION_CANDIDATES = max(MOVER_COUNT, int(os.getenv("ATTENTION_CANDIDATES", "120")))
+ATTENTION_RECENT_HOURS = max(2, int(os.getenv("ATTENTION_RECENT_HOURS", "6")))
+ATTENTION_BASELINE_HOURS = max(2, int(os.getenv("ATTENTION_BASELINE_HOURS", "18")))
+MIN_RECENT_HOURLY_QUOTE_VOLUME = float(os.getenv("MIN_RECENT_HOURLY_QUOTE_VOLUME", "250000"))
+MIN_VOLUME_RETENTION = float(os.getenv("MIN_VOLUME_RETENTION", "0.70"))
+MAX_SINGLE_HOUR_VOLUME_SHARE = float(os.getenv("MAX_SINGLE_HOUR_VOLUME_SHARE", "0.45"))
+MIN_ACTIVE_ATTENTION_HOURS = max(1, int(os.getenv("MIN_ACTIVE_ATTENTION_HOURS", "5")))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
 MAX_PRICE = float(os.getenv("MAX_PRICE", "0"))
 
@@ -174,6 +184,7 @@ RANK = {}
 CHANGE = {}   # symbol -> 24h price change % (refreshed with the symbol list)
 MCAP = {}     # symbol -> market cap in USD (only when USE_MCAP and CoinGecko knows the coin)
 MOVER = {}    # symbol -> (absolute 24h move %, 24h dollar-volume × move score)
+ATTENTION = {}  # symbol -> sustained hourly-volume metrics used for dynamic ranking
 
 _actions_ok = None
 _warned = set()
@@ -888,6 +899,67 @@ def non_utility_reason(base, tags=()):
     return None
 
 
+def attention_metrics(symbol):
+    """Return completed-hour volume metrics, or None when the pair lacks enough history."""
+    rows = get("/api/v3/klines", symbol=symbol, interval="1h",
+               limit=ATTENTION_RECENT_HOURS + ATTENTION_BASELINE_HOURS + 1)
+    now = clock_ms()
+    # Binance includes the currently forming hour, which must not count as a quiet hour.
+    rows = [row for row in rows if len(row) > 7 and int(row[6]) < now]
+    needed = ATTENTION_RECENT_HOURS + ATTENTION_BASELINE_HOURS
+    if len(rows) < needed:
+        return None
+    volumes = [float(row[7]) for row in rows[-needed:]]
+    baseline, recent = volumes[:-ATTENTION_RECENT_HOURS], volumes[-ATTENTION_RECENT_HOURS:]
+    recent_total = sum(recent)
+    recent_average = recent_total / len(recent)
+    baseline_average = sum(baseline) / len(baseline)
+    return {
+        "recent_average": recent_average,
+        "retention": recent_average / baseline_average if baseline_average > 0 else 0.0,
+        "peak_share": max(recent) / recent_total if recent_total > 0 else 1.0,
+        "active_hours": sum(volume > 0 for volume in recent),
+    }
+
+
+def attention_reason(stats):
+    """Why hourly volume does not show durable trader attention, or None."""
+    if stats is None:
+        return "not enough completed hourly volume history"
+    if stats["recent_average"] < MIN_RECENT_HOURLY_QUOTE_VOLUME:
+        return (f"recent hourly volume ${stats['recent_average']:,.0f} below "
+                f"${MIN_RECENT_HOURLY_QUOTE_VOLUME:,.0f}")
+    if stats["retention"] < MIN_VOLUME_RETENTION:
+        return (f"recent volume retained only {stats['retention']:.0%} of its prior "
+                f"{ATTENTION_BASELINE_HOURS}h baseline")
+    if stats["peak_share"] > MAX_SINGLE_HOUR_VOLUME_SHARE:
+        return (f"one hour supplied {stats['peak_share']:.0%} of recent volume "
+                f"(max {MAX_SINGLE_HOUR_VOLUME_SHARE:.0%})")
+    if stats["active_hours"] < MIN_ACTIVE_ATTENTION_HOURS:
+        return (f"traded in only {stats['active_hours']} of the last {ATTENTION_RECENT_HOURS} hours")
+    return None
+
+
+def sustained_attention(symbols):
+    """Fetch a bounded set of hourly histories concurrently and retain durable activity only."""
+    accepted, rejected = {}, Counter()
+    with ThreadPoolExecutor(max_workers=min(SCAN_WORKERS, len(symbols))) as pool:
+        futures = {pool.submit(attention_metrics, symbol): symbol for symbol in symbols}
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                stats = future.result()
+                reason = attention_reason(stats)
+            except Exception as e:
+                reason = f"hourly volume unavailable ({type(e).__name__})"
+                stats = None
+            if reason:
+                rejected[reason] += 1
+            else:
+                accepted[symbol] = stats
+    return accepted, rejected
+
+
 def get_symbols():
     global BLOCKLIST
     BLOCKLIST = read_coin_list(BLOCKLIST_FILE)
@@ -935,6 +1007,7 @@ def get_symbols():
             screened[symbol] = why
         else:
             eligible.append(symbol)
+    attention_rejected = 0
     if DYNAMIC_UNIVERSE:
         def is_mover(symbol):
             change = changes.get(symbol, 0.0)
@@ -954,6 +1027,16 @@ def get_symbols():
             eligible,
             key=lambda sym: (-(volumes[sym] * abs(changes.get(sym, 0.0))), -volumes[sym], sym),
         )
+        candidates = ranked[:ATTENTION_CANDIDATES]
+        attention, attention_reasons = sustained_attention(candidates) if candidates else ({}, Counter())
+        attention_rejected = sum(attention_reasons.values())
+        # Recent hourly volume is the primary signal. Retention rewards a coin whose
+        # attention is holding or growing rather than a one-day volume print fading out.
+        ranked = sorted(
+            attention,
+            key=lambda sym: (-attention[sym]["recent_average"] * abs(changes.get(sym, 0.0)) *
+                             min(attention[sym]["retention"], 2.0), -volumes[sym], sym),
+        )
     else:
         ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
     RANK.clear()
@@ -965,6 +1048,9 @@ def get_symbols():
     MOVER.clear()
     MOVER.update({sym: (abs(changes.get(sym, 0.0)), volumes[sym] * abs(changes.get(sym, 0.0)) / 100)
                   for sym in ranked})
+    ATTENTION.clear()
+    if DYNAMIC_UNIVERSE:
+        ATTENTION.update({sym: attention[sym] for sym in ranked})
     symbols = ranked[:MOVER_COUNT] if DYNAMIC_UNIVERSE else (ranked[:TOP_COINS] if TOP_COINS > 0 else ranked)
     if VERBOSE:
         for sym, why in sorted({**excluded, **screened}.items()):
@@ -981,8 +1067,9 @@ def get_symbols():
         direction = {"both": "up or down", "up": "up", "down": "down"}[MOVER_DIRECTION]
         print(f"Dynamic movers: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
               f"(stocks/ETFs, tokenized commodities, stablecoins, blocklist), "
-              f"{len(ranked)} liquid coins moving at least {MIN_ABS_CHANGE_24H:g}% {direction} in 24h "
-              f"(volume floor ${MIN_24H_QUOTE_VOLUME:,.0f}); scanning top {len(symbols)} by volume × move" + span)
+              f"{len(ranked)} sustained-attention coins moving at least {MIN_ABS_CHANGE_24H:g}% {direction} in 24h "
+              f"(volume floor ${MIN_24H_QUOTE_VOLUME:,.0f}; {attention_rejected} faded/spiky candidates removed); "
+              f"scanning top {len(symbols)} by recent volume, move, and retention" + span)
         return symbols
     print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
           f"(stocks/ETFs, tokenized commodities, memes, stablecoins, blocklist), "
@@ -1028,6 +1115,10 @@ def format_alert(symbol, candle_ms, price, stats=None, signal="rsi_touch"):
     mover = MOVER.get(symbol)
     if mover:
         lines.append(f"Mover activity score: ${mover[1]:,.0f} (24h volume × absolute move)")
+    attention = ATTENTION.get(symbol)
+    if attention:
+        lines.append(f"Sustained attention: ${attention['recent_average']:,.0f}/h over last "
+                     f"{ATTENTION_RECENT_HOURS}h; {attention['retention']:.0%} of prior-volume pace")
     lines.append("Oversold-condition alert only; this is not a confirmed buy signal.")
     lines += [tradingview_url(symbol), f"https://www.binance.com/en/trade/{base}_{QUOTE}?type=spot"]
     return "\n".join(lines)
