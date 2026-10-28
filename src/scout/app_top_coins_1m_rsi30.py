@@ -5,11 +5,10 @@ when RSI was above the configured level on the previous closed candle and is at/
 on the current closed candle. It will not repeat every minute while RSI remains oversold;
 a new alert requires RSI to recover above the level and cross down again. This is a signal
 scanner, not an auto-trader. Test after fees and slippage before using for live trading.
-By default, dynamically scans the most active Binance spot USDT pairs: coins must clear
-both a 24-hour notional-volume floor and a minimum absolute 24-hour move, then are ranked
-by dollar-volume × move. The universe refreshes every five minutes, so new fast movers are
-picked up without a restart. Set DYNAMIC_UNIVERSE=0 and MAJORS=BTC,ETH,... to use a fixed
-curated list instead.
+By default, dynamically scans high-volume Binance spot USDT utility pairs. A pair must
+clear a 24-hour notional-volume floor and prove that its hourly volume remains sustained;
+one-off spikes and meme-tagged assets are excluded. The universe refreshes every five
+minutes. Set DYNAMIC_UNIVERSE=0 and MAJORS=BTC,ETH,... to use a fixed curated list instead.
 """
 import hmac
 import json
@@ -33,7 +32,7 @@ from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field
 
 QUOTE = "USDT"
-# Dynamic mode is the default. It selects high-dollar-volume coins that are moving materially,
+# Dynamic mode is the default. It selects sustained high-dollar-volume utility coins,
 # rather than retaining yesterday's static watchlist. Set DYNAMIC_UNIVERSE=0 for a fixed MAJORS list.
 # In fixed mode, MAJORS can be overridden with a comma-separated list and listed coins bypass
 # the general meme/sector exclusions.
@@ -49,24 +48,25 @@ DEFAULT_MAJORS = (
 MAJORS = [c.strip().upper() for c in os.getenv("MAJORS", DEFAULT_MAJORS).split(",") if c.strip()]
 # TOP_COINS remains supported; MOVER_COUNT is clearer for the dynamic universe.
 TOP_COINS = int(os.getenv("TOP_COINS", "0"))
-MOVER_COUNT = max(1, int(os.getenv("MOVER_COUNT", str(TOP_COINS or 40))))
-MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "1000000"))
-MIN_ABS_CHANGE_24H = float(os.getenv("MIN_ABS_CHANGE_24H", "2"))
-# RSI pullbacks are generally more useful inside an active daily up-move. Use "both" to
-# monitor every fast mover, or "down" specifically for selloff monitoring.
+MOVER_COUNT = max(1, int(os.getenv("MOVER_COUNT", str(TOP_COINS or 80))))
+# A $2M floor leaves enough liquid utility pairs to build a varied watchlist while
+# still excluding the thin tail of Binance's market. Favor actively traded daily gainers
+# so an RSI-30 touch is a pullback candidate, not a coin already collapsing.
+MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "2000000"))
+MIN_ABS_CHANGE_24H = float(os.getenv("MIN_ABS_CHANGE_24H", "1"))
 MOVER_DIRECTION = os.getenv("MOVER_DIRECTION", "up").strip().lower()
 if MOVER_DIRECTION not in {"both", "up", "down"}:
     raise ValueError("MOVER_DIRECTION must be one of: both, up, down")
 # A rolling 24h ticker can remain large after a one-off pump. Before choosing the
 # watchlist, compare the last six completed hourly candles with the preceding 18.
 # This keeps coins with sustained trader attention and rejects volume that has faded.
-ATTENTION_CANDIDATES = max(MOVER_COUNT, int(os.getenv("ATTENTION_CANDIDATES", "120")))
+ATTENTION_CANDIDATES = max(MOVER_COUNT, int(os.getenv("ATTENTION_CANDIDATES", "200")))
 ATTENTION_RECENT_HOURS = max(2, int(os.getenv("ATTENTION_RECENT_HOURS", "6")))
 ATTENTION_BASELINE_HOURS = max(2, int(os.getenv("ATTENTION_BASELINE_HOURS", "18")))
-MIN_RECENT_HOURLY_QUOTE_VOLUME = float(os.getenv("MIN_RECENT_HOURLY_QUOTE_VOLUME", "250000"))
-MIN_VOLUME_RETENTION = float(os.getenv("MIN_VOLUME_RETENTION", "0.70"))
-MAX_SINGLE_HOUR_VOLUME_SHARE = float(os.getenv("MAX_SINGLE_HOUR_VOLUME_SHARE", "0.45"))
-MIN_ACTIVE_ATTENTION_HOURS = max(1, int(os.getenv("MIN_ACTIVE_ATTENTION_HOURS", "5")))
+MIN_RECENT_HOURLY_QUOTE_VOLUME = float(os.getenv("MIN_RECENT_HOURLY_QUOTE_VOLUME", "100000"))
+MIN_VOLUME_RETENTION = float(os.getenv("MIN_VOLUME_RETENTION", "0.45"))
+MAX_SINGLE_HOUR_VOLUME_SHARE = float(os.getenv("MAX_SINGLE_HOUR_VOLUME_SHARE", "0.70"))
+MIN_ACTIVE_ATTENTION_HOURS = max(1, int(os.getenv("MIN_ACTIVE_ATTENTION_HOURS", "4")))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0"))
 MAX_PRICE = float(os.getenv("MAX_PRICE", "0"))
 
@@ -144,7 +144,7 @@ TEST_WAIT = float(os.getenv("TEST_WAIT", "30"))
 EXCLUDE_COINS = {c.strip().upper() for c in os.getenv("EXCLUDE_COINS", "").split(",") if c.strip()}
 KEEP_COINS = {c.strip().upper() for c in os.getenv("KEEP_COINS", "").split(",") if c.strip()}
 BLOCKLIST_FILE = Path(os.getenv("BLOCKLIST_FILE", Path(__file__).resolve().parent / "blocklist.txt"))
-EXCLUDE_MEMES = os.getenv("EXCLUDE_MEMES", "0" if DYNAMIC_UNIVERSE else "1") == "1"
+EXCLUDE_MEMES = os.getenv("EXCLUDE_MEMES", "1") == "1"
 EXCLUDE_TAGS = {t.strip().lower() for t in
                 os.getenv("EXCLUDE_TAGS", "bstocks,tcommodities,stablecoin" +
                           (",meme,memes" if EXCLUDE_MEMES else "")).split(",") if t.strip()}
@@ -183,7 +183,6 @@ local_session.trust_env = False
 RANK = {}
 CHANGE = {}   # symbol -> 24h price change % (refreshed with the symbol list)
 MCAP = {}     # symbol -> market cap in USD (only when USE_MCAP and CoinGecko knows the coin)
-MOVER = {}    # symbol -> (absolute 24h move %, 24h dollar-volume × move score)
 ATTENTION = {}  # symbol -> sustained hourly-volume metrics used for dynamic ranking
 
 _actions_ok = None
@@ -1009,7 +1008,9 @@ def get_symbols():
             eligible.append(symbol)
     attention_rejected = 0
     if DYNAMIC_UNIVERSE:
-        def is_mover(symbol):
+        def passes_optional_move_filter(symbol):
+            if MIN_ABS_CHANGE_24H <= 0:
+                return True
             change = changes.get(symbol, 0.0)
             if abs(change) < MIN_ABS_CHANGE_24H:
                 return False
@@ -1019,14 +1020,10 @@ def get_symbols():
                 return change <= -MIN_ABS_CHANGE_24H
             return True
 
-        eligible = [symbol for symbol in eligible if is_mover(symbol)]
-        # Rank by the amount of dollar volume participating in the move. This avoids
-        # selecting a thin token solely for a large percentage print while still
-        # prioritising a real, high-volume move over a merely liquid flat market.
-        ranked = sorted(
-            eligible,
-            key=lambda sym: (-(volumes[sym] * abs(changes.get(sym, 0.0))), -volumes[sym], sym),
-        )
+        eligible = [symbol for symbol in eligible if passes_optional_move_filter(symbol)]
+        # Start with the most liquid utility pairs. Price movement never changes the
+        # default ranking, so a short-lived pump cannot buy its way into the watchlist.
+        ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
         candidates = ranked[:ATTENTION_CANDIDATES]
         attention, attention_reasons = sustained_attention(candidates) if candidates else ({}, Counter())
         attention_rejected = sum(attention_reasons.values())
@@ -1034,8 +1031,8 @@ def get_symbols():
         # attention is holding or growing rather than a one-day volume print fading out.
         ranked = sorted(
             attention,
-            key=lambda sym: (-attention[sym]["recent_average"] * abs(changes.get(sym, 0.0)) *
-                             min(attention[sym]["retention"], 2.0), -volumes[sym], sym),
+            key=lambda sym: (-attention[sym]["recent_average"] * min(attention[sym]["retention"], 2.0),
+                             -volumes[sym], sym),
         )
     else:
         ranked = sorted(eligible, key=lambda sym: (-volumes[sym], sym))
@@ -1045,9 +1042,6 @@ def get_symbols():
     CHANGE.update({sym: changes.get(sym, 0.0) for sym in ranked})
     MCAP.clear()
     MCAP.update({sym: caps[bases[sym]] for sym in ranked if bases[sym] in caps})
-    MOVER.clear()
-    MOVER.update({sym: (abs(changes.get(sym, 0.0)), volumes[sym] * abs(changes.get(sym, 0.0)) / 100)
-                  for sym in ranked})
     ATTENTION.clear()
     if DYNAMIC_UNIVERSE:
         ATTENTION.update({sym: attention[sym] for sym in ranked})
@@ -1065,11 +1059,12 @@ def get_symbols():
         return symbols
     if DYNAMIC_UNIVERSE:
         direction = {"both": "up or down", "up": "up", "down": "down"}[MOVER_DIRECTION]
-        print(f"Dynamic movers: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
+        print(f"Dynamic utility universe: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
               f"(stocks/ETFs, tokenized commodities, stablecoins, blocklist), "
-              f"{len(ranked)} sustained-attention coins moving at least {MIN_ABS_CHANGE_24H:g}% {direction} in 24h "
+              f"{len(ranked)} sustained-attention utility coins"
+              + (f" moving at least {MIN_ABS_CHANGE_24H:g}% {direction} in 24h" if MIN_ABS_CHANGE_24H > 0 else "") + " "
               f"(volume floor ${MIN_24H_QUOTE_VOLUME:,.0f}; {attention_rejected} faded/spiky candidates removed); "
-              f"scanning top {len(symbols)} by recent volume, move, and retention" + span)
+              f"scanning top {len(symbols)} by recent volume and retention" + span)
         return symbols
     print(f"Filter: {len(bases)} Binance spot {QUOTE} pairs, {len(excluded)} excluded as non-crypto or low quality "
           f"(stocks/ETFs, tokenized commodities, memes, stablecoins, blocklist), "
@@ -1112,9 +1107,6 @@ def format_alert(symbol, candle_ms, price, stats=None, signal="rsi_touch"):
     change = stats.get("change_24h", CHANGE.get(symbol)) if stats else CHANGE.get(symbol)
     if change is not None:
         lines.append(f"24h price change: {change:+.1f}%")
-    mover = MOVER.get(symbol)
-    if mover:
-        lines.append(f"Mover activity score: ${mover[1]:,.0f} (24h volume × absolute move)")
     attention = ATTENTION.get(symbol)
     if attention:
         lines.append(f"Sustained attention: ${attention['recent_average']:,.0f}/h over last "
@@ -1295,7 +1287,7 @@ def main():
     scan_pool = ThreadPoolExecutor(max_workers=SCAN_WORKERS)
     alert_pool = ThreadPoolExecutor(max_workers=ALERT_WORKERS)
 
-    scope = "dynamic high-volume movers" if DYNAMIC_UNIVERSE else "curated top coins"
+    scope = "dynamic high-volume utility coins" if DYNAMIC_UNIVERSE else "curated top coins"
     notify(f"{scope.title()} 1m RSI({RSI_PERIOD}) {RSI_LEVEL:g} touch scanner started.")
     while True:
         if not symbols or time.time() - last_refresh > REFRESH_SYMBOLS_EVERY:
